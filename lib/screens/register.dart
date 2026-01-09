@@ -1,12 +1,7 @@
 import 'package:flutter/material.dart';
 import '../core/theme/app_colors.dart';
 
-enum PasswordStrength {
-  weak,
-  fair,
-  good,
-  strong,
-}
+enum PasswordStrength { weak, fair, good, strong }
 
 class RegisterScreen extends StatefulWidget {
   const RegisterScreen({super.key});
@@ -19,9 +14,7 @@ class _RegisterScreenState extends State<RegisterScreen> {
   final _formKey = GlobalKey<FormState>();
   final _firstNameController = TextEditingController();
   final _lastNameController = TextEditingController();
-  final _companyNameController = TextEditingController();
   final _emailController = TextEditingController();
-  final _passwordController = TextEditingController();
   final _phoneController = TextEditingController();
   bool _isPasswordVisible = false;
   bool _isLoading = false;
@@ -30,74 +23,9 @@ class _RegisterScreenState extends State<RegisterScreen> {
   void dispose() {
     _firstNameController.dispose();
     _lastNameController.dispose();
-    _companyNameController.dispose();
     _emailController.dispose();
-    _passwordController.dispose();
     _phoneController.dispose();
     super.dispose();
-  }
-
-  PasswordStrength _calculatePasswordStrength(String password) {
-    if (password.isEmpty) return PasswordStrength.weak;
-    
-    int strength = 0;
-    
-    // Length check
-    if (password.length >= 8) strength++;
-    if (password.length >= 12) strength++;
-    
-    // Character variety checks
-    if (password.contains(RegExp(r'[a-z]'))) strength++;
-    if (password.contains(RegExp(r'[A-Z]'))) strength++;
-    if (password.contains(RegExp(r'[0-9]'))) strength++;
-    if (password.contains(RegExp(r'[!@#$%^&*(),.?":{}|<>]'))) strength++;
-    
-    if (strength <= 2) return PasswordStrength.weak;
-    if (strength <= 4) return PasswordStrength.fair;
-    if (strength <= 5) return PasswordStrength.good;
-    return PasswordStrength.strong;
-  }
-
-  double _getPasswordStrengthProgress(String password) {
-    final strength = _calculatePasswordStrength(password);
-    switch (strength) {
-      case PasswordStrength.weak:
-        return 0.25;
-      case PasswordStrength.fair:
-        return 0.5;
-      case PasswordStrength.good:
-        return 0.75;
-      case PasswordStrength.strong:
-        return 1.0;
-    }
-  }
-
-  Color _getPasswordStrengthColor(String password) {
-    final strength = _calculatePasswordStrength(password);
-    switch (strength) {
-      case PasswordStrength.weak:
-        return AppColors.error;
-      case PasswordStrength.fair:
-        return AppColors.warning;
-      case PasswordStrength.good:
-        return AppColors.info;
-      case PasswordStrength.strong:
-        return AppColors.success;
-    }
-  }
-
-  String _getPasswordStrengthText(String password) {
-    final strength = _calculatePasswordStrength(password);
-    switch (strength) {
-      case PasswordStrength.weak:
-        return 'Weak';
-      case PasswordStrength.fair:
-        return 'Fair';
-      case PasswordStrength.good:
-        return 'Good';
-      case PasswordStrength.strong:
-        return 'Strong';
-    }
   }
 
   void _handleRegister() {
@@ -105,26 +33,24 @@ class _RegisterScreenState extends State<RegisterScreen> {
       setState(() {
         _isLoading = true;
       });
-    // TODO: Implement actual registration logic
-    // Simulate loading for demonstration
-    Future.delayed(const Duration(seconds: 2), () {
-      if (mounted) {
-        setState(() {
-          _isLoading = false;
-        });
-        // Navigate to PIN setup after successful registration
-        Navigator.of(context).pushReplacementNamed('/pin-setup');
-      }
-    });
+      // TODO: Implement actual registration logic
+      // Simulate loading for demonstration
+      Future.delayed(const Duration(seconds: 2), () {
+        if (mounted) {
+          setState(() {
+            _isLoading = false;
+          });
+          // Navigate to PIN setup after successful registration
+          Navigator.of(context).pushReplacementNamed('/pin-setup');
+        }
+      });
     }
   }
 
   bool get _canRegister {
     return _firstNameController.text.isNotEmpty &&
         _lastNameController.text.isNotEmpty &&
-        _companyNameController.text.isNotEmpty &&
         _emailController.text.isNotEmpty &&
-        _passwordController.text.isNotEmpty &&
         _phoneController.text.isNotEmpty &&
         !_isLoading;
   }
@@ -150,11 +76,15 @@ class _RegisterScreenState extends State<RegisterScreen> {
               final screenHeight = MediaQuery.of(context).size.height;
               final safeAreaTop = MediaQuery.of(context).padding.top;
               final safeAreaBottom = MediaQuery.of(context).padding.bottom;
-              final availableHeight = screenHeight - safeAreaTop - safeAreaBottom;
-              
+              final availableHeight =
+                  screenHeight - safeAreaTop - safeAreaBottom;
+
               final minContentHeight = 800.0;
-              final extraSpacing = (availableHeight - minContentHeight).clamp(0.0, 100.0);
-              
+              final extraSpacing = (availableHeight - minContentHeight).clamp(
+                0.0,
+                100.0,
+              );
+
               return Form(
                 key: _formKey,
                 child: Column(
@@ -173,11 +103,7 @@ class _RegisterScreenState extends State<RegisterScreen> {
                     const SizedBox(height: 20.0),
                     _buildLastNameField(),
                     const SizedBox(height: 20.0),
-                    _buildCompanyNameField(),
-                    const SizedBox(height: 20.0),
                     _buildEmailField(),
-                    const SizedBox(height: 20.0),
-                    _buildPasswordField(),
                     const SizedBox(height: 20.0),
                     _buildPhoneField(),
 
@@ -215,9 +141,7 @@ class _RegisterScreenState extends State<RegisterScreen> {
         const SizedBox(height: 12.0),
         Text(
           'Please fill in your details to create an account',
-          style: textTheme.bodyMedium?.copyWith(
-            color: AppColors.textSecondary,
-          ),
+          style: textTheme.bodyMedium?.copyWith(color: AppColors.textSecondary),
         ),
       ],
     );
@@ -261,25 +185,6 @@ class _RegisterScreenState extends State<RegisterScreen> {
     );
   }
 
-  Widget _buildCompanyNameField() {
-    return TextFormField(
-      controller: _companyNameController,
-      textInputAction: TextInputAction.next,
-      textCapitalization: TextCapitalization.words,
-      decoration: const InputDecoration(
-        labelText: 'Company Name',
-        hintText: 'Enter your company name',
-      ),
-      onChanged: (_) => setState(() {}),
-      validator: (value) {
-        if (value == null || value.isEmpty) {
-          return 'Please enter your company name';
-        }
-        return null;
-      },
-    );
-  }
-
   Widget _buildEmailField() {
     return TextFormField(
       controller: _emailController,
@@ -299,79 +204,6 @@ class _RegisterScreenState extends State<RegisterScreen> {
         }
         return null;
       },
-    );
-  }
-
-  Widget _buildPasswordField() {
-    final password = _passwordController.text;
-    final strength = _calculatePasswordStrength(password);
-    final showStrengthIndicator = password.isNotEmpty;
-
-    return Column(
-      crossAxisAlignment: CrossAxisAlignment.start,
-      children: [
-        TextFormField(
-          controller: _passwordController,
-          obscureText: !_isPasswordVisible,
-          textInputAction: TextInputAction.next,
-          decoration: InputDecoration(
-            labelText: 'Password',
-            hintText: 'Enter your password',
-            suffixIcon: IconButton(
-              icon: Icon(
-                _isPasswordVisible ? Icons.visibility : Icons.visibility_off,
-                color: AppColors.textSecondary,
-              ),
-              onPressed: () {
-                setState(() {
-                  _isPasswordVisible = !_isPasswordVisible;
-                });
-              },
-            ),
-          ),
-          onChanged: (_) => setState(() {}),
-          validator: (value) {
-            if (value == null || value.isEmpty) {
-              return 'Please enter your password';
-            }
-            if (value.length < 8) {
-              return 'Password must be at least 8 characters';
-            }
-            if (strength == PasswordStrength.weak) {
-              return 'Password is too weak. Please use a stronger password';
-            }
-            return null;
-          },
-        ),
-        if (showStrengthIndicator) ...[
-          const SizedBox(height: 8.0),
-          Row(
-            children: [
-              Expanded(
-                child: ClipRRect(
-                  borderRadius: BorderRadius.circular(4.0),
-                  child: LinearProgressIndicator(
-                    value: _getPasswordStrengthProgress(password),
-                    backgroundColor: AppColors.offWhite,
-                    valueColor: AlwaysStoppedAnimation<Color>(
-                      _getPasswordStrengthColor(password),
-                    ),
-                    minHeight: 6.0,
-                  ),
-                ),
-              ),
-              const SizedBox(width: 12.0),
-              Text(
-                _getPasswordStrengthText(password),
-                style: Theme.of(context).textTheme.bodySmall?.copyWith(
-                      color: _getPasswordStrengthColor(password),
-                      fontWeight: FontWeight.w600,
-                    ),
-              ),
-            ],
-          ),
-        ],
-      ],
     );
   }
 
@@ -400,26 +232,43 @@ class _RegisterScreenState extends State<RegisterScreen> {
   }
 
   Widget _buildRegisterButton(ThemeData theme) {
+    final isEnabled = _canRegister;
     return SizedBox(
       height: 52.0,
       child: ElevatedButton(
-        onPressed: _canRegister ? _handleRegister : null,
-        child: _isLoading
-            ? const SizedBox(
-                height: 20.0,
-                width: 20.0,
-                child: CircularProgressIndicator(
-                  strokeWidth: 2.0,
-                  valueColor: AlwaysStoppedAnimation<Color>(AppColors.background),
+        onPressed: isEnabled ? _handleRegister : null,
+        style: ElevatedButton.styleFrom(
+          backgroundColor: AppColors.primary,
+          foregroundColor: AppColors.background,
+          disabledBackgroundColor: AppColors.primary.withOpacity(0.5),
+          disabledForegroundColor: AppColors.background.withOpacity(0.7),
+          elevation: 0,
+          shape: RoundedRectangleBorder(
+            borderRadius: BorderRadius.circular(12.0),
+          ),
+        ),
+        child:
+            _isLoading
+                ? const SizedBox(
+                  height: 20.0,
+                  width: 20.0,
+                  child: CircularProgressIndicator(
+                    strokeWidth: 2.0,
+                    valueColor: AlwaysStoppedAnimation<Color>(
+                      AppColors.background,
+                    ),
+                  ),
+                )
+                : Text(
+                  'Register',
+                  style: theme.textTheme.labelLarge?.copyWith(
+                    color:
+                        isEnabled
+                            ? AppColors.background
+                            : AppColors.background.withOpacity(0.7),
+                    fontWeight: FontWeight.w600,
+                  ),
                 ),
-              )
-            : Text(
-                'Register',
-                style: theme.textTheme.labelLarge?.copyWith(
-                  color: AppColors.background,
-                  fontWeight: FontWeight.w600,
-                ),
-              ),
       ),
     );
   }
@@ -427,11 +276,8 @@ class _RegisterScreenState extends State<RegisterScreen> {
   Widget _buildFooter(TextTheme textTheme) {
     return Text(
       'By creating an account, you agree to our Terms of Service and Privacy Policy',
-      style: textTheme.bodySmall?.copyWith(
-        color: AppColors.textMuted,
-      ),
+      style: textTheme.bodySmall?.copyWith(color: AppColors.textMuted),
       textAlign: TextAlign.center,
     );
   }
 }
-

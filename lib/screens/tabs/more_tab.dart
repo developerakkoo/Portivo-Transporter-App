@@ -32,7 +32,55 @@ class MoreTab extends StatelessWidget {
               icon: Icons.local_shipping_outlined,
               title: 'Vehicles',
               onTap: () {
-                // TODO: Navigate to settings
+                // TODO: Navigate to vehicles
+              },
+            ),
+            _buildMenuItem(
+              context: context,
+              icon: Icons.people_outlined,
+              title: 'Drivers',
+              onTap: () {
+                // TODO: Navigate to drivers
+              },
+            ),
+            _buildMenuItem(
+              context: context,
+              icon: Icons.business_outlined,
+              title: 'Company',
+              onTap: () {
+                // TODO: Navigate to company
+              },
+            ),
+            _buildMenuItem(
+              context: context,
+              icon: Icons.group_outlined,
+              title: 'Users',
+              onTap: () {
+                // TODO: Navigate to users
+              },
+            ),
+            _buildMenuItem(
+              context: context,
+              icon: Icons.account_balance_wallet_outlined,
+              title: 'Wallet',
+              onTap: () {
+                Navigator.of(context).pushNamed('/wallet');
+              },
+            ),
+            _buildMenuItem(
+              context: context,
+              icon: Icons.credit_card_outlined,
+              title: 'Fuel Cards',
+              onTap: () {
+                Navigator.of(context).pushNamed('/fuel-cards');
+              },
+            ),
+            _buildMenuItem(
+              context: context,
+              icon: Icons.local_gas_station_outlined,
+              title: 'Fuel Partners',
+              onTap: () {
+                // TODO: Navigate to fuel partners
               },
             ),
             const SizedBox(height: 24.0),

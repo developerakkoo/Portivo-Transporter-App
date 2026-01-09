@@ -10,15 +10,13 @@ class LoginScreen extends StatefulWidget {
 
 class _LoginScreenState extends State<LoginScreen> {
   final _formKey = GlobalKey<FormState>();
-  final _emailController = TextEditingController();
-  final _passwordController = TextEditingController();
+  final _mobileController = TextEditingController();
   bool _isPasswordVisible = false;
   bool _isLoading = false;
 
   @override
   void dispose() {
-    _emailController.dispose();
-    _passwordController.dispose();
+    _mobileController.dispose();
     super.dispose();
   }
 
@@ -48,9 +46,7 @@ class _LoginScreenState extends State<LoginScreen> {
   }
 
   bool get _canSignIn {
-    return _emailController.text.isNotEmpty &&
-        _passwordController.text.isNotEmpty &&
-        !_isLoading;
+    return _mobileController.text.isNotEmpty && !_isLoading;
   }
 
   @override
@@ -68,13 +64,18 @@ class _LoginScreenState extends State<LoginScreen> {
               final screenHeight = MediaQuery.of(context).size.height;
               final safeAreaTop = MediaQuery.of(context).padding.top;
               final safeAreaBottom = MediaQuery.of(context).padding.bottom;
-              final availableHeight = screenHeight - safeAreaTop - safeAreaBottom;
-              
+              final availableHeight =
+                  screenHeight - safeAreaTop - safeAreaBottom;
+
               // Approximate content height (will be measured)
               // Add flexible spacing to push footer down
-              final minContentHeight = 600.0; // Approximate minimum content height
-              final extraSpacing = (availableHeight - minContentHeight).clamp(0.0, 200.0);
-              
+              final minContentHeight =
+                  600.0; // Approximate minimum content height
+              final extraSpacing = (availableHeight - minContentHeight).clamp(
+                0.0,
+                200.0,
+              );
+
               return Form(
                 key: _formKey,
                 child: Column(
@@ -89,11 +90,8 @@ class _LoginScreenState extends State<LoginScreen> {
                     const SizedBox(height: 28.0),
 
                     // Form Section
-                    _buildEmailField(textTheme),
+                    _buildMobileField(textTheme),
                     const SizedBox(height: 20.0),
-                    _buildPasswordField(textTheme),
-
-                    const SizedBox(height: 32.0),
 
                     // Primary Action
                     _buildSignInButton(theme),
@@ -131,10 +129,7 @@ class _LoginScreenState extends State<LoginScreen> {
           width: 180.0,
           fit: BoxFit.cover,
           errorBuilder: (context, error, stackTrace) {
-            return const SizedBox(
-              height: 80.0,
-              width: 180.0,
-            );
+            return const SizedBox(height: 80.0, width: 180.0);
           },
         ),
         const SizedBox(height: 32.0),
@@ -152,67 +147,30 @@ class _LoginScreenState extends State<LoginScreen> {
         // Subtitle
         Text(
           'Please enter your email and password to continue',
-          style: textTheme.bodyMedium?.copyWith(
-            color: AppColors.textSecondary,
-          ),
+          style: textTheme.bodyMedium?.copyWith(color: AppColors.textSecondary),
           textAlign: TextAlign.left,
         ),
       ],
     );
   }
 
-  Widget _buildEmailField(TextTheme textTheme) {
+  Widget _buildMobileField(TextTheme textTheme) {
     return TextFormField(
-      controller: _emailController,
-      keyboardType: TextInputType.emailAddress,
+      controller: _mobileController,
+      keyboardType: TextInputType.phone,
       textInputAction: TextInputAction.next,
       decoration: const InputDecoration(
-        labelText: 'Email',
-        hintText: 'Enter your email',
+        labelText: 'Mobile Number',
+        hintText: 'Enter your mobile number',
       ),
       onChanged: (_) => setState(() {}),
       validator: (value) {
         if (value == null || value.isEmpty) {
-          return 'Please enter your email';
+          return 'Please enter your mobile number';
         }
-        // Email validation placeholder
-        if (!value.contains('@')) {
-          return 'Please enter a valid email';
-        }
-        return null;
-      },
-    );
-  }
-
-  Widget _buildPasswordField(TextTheme textTheme) {
-    return TextFormField(
-      controller: _passwordController,
-      obscureText: !_isPasswordVisible,
-      textInputAction: TextInputAction.done,
-      onFieldSubmitted: (_) => _handleSignIn(),
-      decoration: InputDecoration(
-        labelText: 'Password',
-        hintText: 'Enter your password',
-        suffixIcon: IconButton(
-          icon: Icon(
-            _isPasswordVisible ? Icons.visibility : Icons.visibility_off,
-            color: AppColors.textSecondary,
-          ),
-          onPressed: () {
-            setState(() {
-              _isPasswordVisible = !_isPasswordVisible;
-            });
-          },
-        ),
-      ),
-      onChanged: (_) => setState(() {}),
-      validator: (value) {
-        if (value == null || value.isEmpty) {
-          return 'Please enter your password';
-        }
-        // Password validation placeholder
-        if (value.length < 6) {
-          return 'Password must be at least 6 characters';
+        // Mobile number validation placeholder
+        if (value.length < 10) {
+          return 'Please enter a valid mobile number';
         }
         return null;
       },
@@ -224,22 +182,25 @@ class _LoginScreenState extends State<LoginScreen> {
       height: 52.0,
       child: ElevatedButton(
         onPressed: _canSignIn ? _handleSignIn : null,
-        child: _isLoading
-            ? const SizedBox(
-                height: 20.0,
-                width: 20.0,
-                child: CircularProgressIndicator(
-                  strokeWidth: 2.0,
-                  valueColor: AlwaysStoppedAnimation<Color>(AppColors.background),
+        child:
+            _isLoading
+                ? const SizedBox(
+                  height: 20.0,
+                  width: 20.0,
+                  child: CircularProgressIndicator(
+                    strokeWidth: 2.0,
+                    valueColor: AlwaysStoppedAnimation<Color>(
+                      AppColors.background,
+                    ),
+                  ),
+                )
+                : Text(
+                  'Sign in',
+                  style: theme.textTheme.labelLarge?.copyWith(
+                    color: AppColors.background,
+                    fontWeight: FontWeight.w600,
+                  ),
                 ),
-              )
-            : Text(
-                'Sign in',
-                style: theme.textTheme.labelLarge?.copyWith(
-                  color: AppColors.background,
-                  fontWeight: FontWeight.w600,
-                ),
-              ),
       ),
     );
   }
@@ -297,9 +258,7 @@ class _LoginScreenState extends State<LoginScreen> {
   Widget _buildFooter(TextTheme textTheme) {
     return Text(
       'By continuing, you agree to our Terms of Service and Privacy Policy',
-      style: textTheme.bodySmall?.copyWith(
-        color: AppColors.textMuted,
-      ),
+      style: textTheme.bodySmall?.copyWith(color: AppColors.textMuted),
       textAlign: TextAlign.center,
     );
   }
