@@ -11,6 +11,9 @@ import 'screens/search_customer.dart';
 import 'screens/wallet.dart';
 import 'screens/fuel_cards.dart';
 import 'screens/fuel_card_qr.dart';
+import 'screens/drivers/add_driver_screen.dart';
+import 'screens/company_users/company_users_screen.dart';
+import 'screens/company_users/add_edit_user_screen.dart';
 
 void main() {
   runApp(const MyApp());
@@ -38,6 +41,9 @@ class MyApp extends StatelessWidget {
         '/wallet': (context) => const WalletScreen(),
         '/fuel-cards': (context) => const FuelCardsScreen(),
         '/fuel-card-qr': (context) => const FuelCardQRScreen(),
+        '/add-driver': (context) => const AddDriverScreen(),
+        '/company-users': (context) => const CompanyUsersScreen(),
+        '/add-user': (context) => const AddEditUserScreen(),
       },
     );
   }

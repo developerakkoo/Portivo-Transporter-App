@@ -17,46 +17,12 @@ class MoreTab extends StatelessWidget {
         child: ListView(
           padding: const EdgeInsets.all(24.0),
           children: [
-            _buildSectionHeader(textTheme, 'Account'),
-            const SizedBox(height: 8.0),
             _buildMenuItem(
               context: context,
-              icon: Icons.person_outline,
-              title: 'Profile',
-              onTap: () {
-                // TODO: Navigate to profile
-              },
-            ),
-            _buildMenuItem(
-              context: context,
-              icon: Icons.local_shipping_outlined,
+              icon: Icons.directions_car_outlined,
               title: 'Vehicles',
               onTap: () {
                 // TODO: Navigate to vehicles
-              },
-            ),
-            _buildMenuItem(
-              context: context,
-              icon: Icons.people_outlined,
-              title: 'Drivers',
-              onTap: () {
-                // TODO: Navigate to drivers
-              },
-            ),
-            _buildMenuItem(
-              context: context,
-              icon: Icons.business_outlined,
-              title: 'Company',
-              onTap: () {
-                // TODO: Navigate to company
-              },
-            ),
-            _buildMenuItem(
-              context: context,
-              icon: Icons.group_outlined,
-              title: 'Users',
-              onTap: () {
-                // TODO: Navigate to users
               },
             ),
             _buildMenuItem(
@@ -70,72 +36,31 @@ class MoreTab extends StatelessWidget {
             _buildMenuItem(
               context: context,
               icon: Icons.credit_card_outlined,
-              title: 'Fuel Cards',
+              title: 'Fuel cards',
               onTap: () {
                 Navigator.of(context).pushNamed('/fuel-cards');
               },
             ),
             _buildMenuItem(
               context: context,
-              icon: Icons.local_gas_station_outlined,
-              title: 'Fuel Partners',
+              icon: Icons.business_outlined,
+              title: 'Company & users',
               onTap: () {
-                // TODO: Navigate to fuel partners
+                Navigator.of(context).pushNamed('/company-users');
               },
             ),
-            const SizedBox(height: 24.0),
-            _buildSectionHeader(textTheme, 'Support'),
-            const SizedBox(height: 8.0),
             _buildMenuItem(
               context: context,
               icon: Icons.help_outline,
-              title: 'Help & Support',
+              title: 'Support',
               onTap: () {
-                // TODO: Navigate to help
-              },
-            ),
-            _buildMenuItem(
-              context: context,
-              icon: Icons.info_outline,
-              title: 'About',
-              onTap: () {
-                // TODO: Navigate to about
-              },
-            ),
-            const SizedBox(height: 24.0),
-            _buildSectionHeader(textTheme, 'Legal'),
-            const SizedBox(height: 8.0),
-            _buildMenuItem(
-              context: context,
-              icon: Icons.description_outlined,
-              title: 'Terms of Service',
-              onTap: () {
-                // TODO: Navigate to terms
-              },
-            ),
-            _buildMenuItem(
-              context: context,
-              icon: Icons.privacy_tip_outlined,
-              title: 'Privacy Policy',
-              onTap: () {
-                // TODO: Navigate to privacy
+                // TODO: Navigate to support
               },
             ),
             const SizedBox(height: 32.0),
             _buildLogoutButton(context, textTheme),
           ],
         ),
-      ),
-    );
-  }
-
-  Widget _buildSectionHeader(TextTheme textTheme, String title) {
-    return Text(
-      title,
-      style: textTheme.titleSmall?.copyWith(
-        color: AppColors.textMuted,
-        fontWeight: FontWeight.w600,
-        letterSpacing: 0.5,
       ),
     );
   }
