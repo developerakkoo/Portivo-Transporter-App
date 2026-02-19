@@ -1,5 +1,7 @@
 import 'package:flutter/material.dart';
+import 'package:provider/provider.dart';
 import '../core/theme/app_colors.dart';
+import '../providers/auth_provider.dart';
 
 enum PasswordStrength { weak, fair, good, strong }
 
@@ -16,7 +18,7 @@ class _RegisterScreenState extends State<RegisterScreen> {
   final _lastNameController = TextEditingController();
   final _emailController = TextEditingController();
   final _phoneController = TextEditingController();
-  bool _isPasswordVisible = false;
+  final _companyController = TextEditingController();
   bool _isLoading = false;
 
   @override
@@ -25,25 +27,58 @@ class _RegisterScreenState extends State<RegisterScreen> {
     _lastNameController.dispose();
     _emailController.dispose();
     _phoneController.dispose();
+    _companyController.dispose();
     super.dispose();
   }
 
-  void _handleRegister() {
+  Future<void> _handleRegister() async {
     if (_formKey.currentState?.validate() ?? false) {
       setState(() {
         _isLoading = true;
       });
-      // TODO: Implement actual registration logic
-      // Simulate loading for demonstration
-      Future.delayed(const Duration(seconds: 2), () {
+
+      try {
+        final authProvider = Provider.of<AuthProvider>(context, listen: false);
+        
+        final success = await authProvider.register(
+          _phoneController.text.trim(),
+          '${_firstNameController.text.trim()} ${_lastNameController.text.trim()}'.trim(),
+          _emailController.text.trim(),
+          _companyController.text.trim(),
+        );
+
+        if (mounted) {
+          if (success) {
+            // Navigate to PIN setup after successful registration
+            Navigator.of(context).pushReplacementNamed(
+              '/pin-setup',
+              arguments: _phoneController.text.trim(),
+            );
+          } else {
+            setState(() {
+              _isLoading = false;
+            });
+            ScaffoldMessenger.of(context).showSnackBar(
+              SnackBar(
+                content: Text(authProvider.error ?? 'Registration failed'),
+                backgroundColor: Colors.red,
+              ),
+            );
+          }
+        }
+      } catch (e) {
         if (mounted) {
           setState(() {
             _isLoading = false;
           });
-          // Navigate to PIN setup after successful registration
-          Navigator.of(context).pushReplacementNamed('/pin-setup');
+          ScaffoldMessenger.of(context).showSnackBar(
+            SnackBar(
+              content: Text('Registration failed: ${e.toString().replaceFirst('Exception: ', '')}'),
+              backgroundColor: Colors.red,
+            ),
+          );
         }
-      });
+      }
     }
   }
 
@@ -52,6 +87,7 @@ class _RegisterScreenState extends State<RegisterScreen> {
         _lastNameController.text.isNotEmpty &&
         _emailController.text.isNotEmpty &&
         _phoneController.text.isNotEmpty &&
+        _companyController.text.isNotEmpty &&
         !_isLoading;
   }
 
@@ -106,6 +142,8 @@ class _RegisterScreenState extends State<RegisterScreen> {
                     _buildEmailField(),
                     const SizedBox(height: 20.0),
                     _buildPhoneField(),
+                    const SizedBox(height: 20.0),
+                    _buildCompanyField(),
 
                     const SizedBox(height: 32.0),
 
@@ -211,13 +249,12 @@ class _RegisterScreenState extends State<RegisterScreen> {
     return TextFormField(
       controller: _phoneController,
       keyboardType: TextInputType.phone,
-      textInputAction: TextInputAction.done,
+      textInputAction: TextInputAction.next,
       decoration: const InputDecoration(
         labelText: 'Phone Number',
         hintText: 'Enter your phone number',
       ),
       onChanged: (_) => setState(() {}),
-      onFieldSubmitted: (_) => _handleRegister(),
       validator: (value) {
         if (value == null || value.isEmpty) {
           return 'Please enter your phone number';
@@ -225,6 +262,26 @@ class _RegisterScreenState extends State<RegisterScreen> {
         // Basic phone validation
         if (value.length < 10) {
           return 'Please enter a valid phone number';
+        }
+        return null;
+      },
+    );
+  }
+
+  Widget _buildCompanyField() {
+    return TextFormField(
+      controller: _companyController,
+      textInputAction: TextInputAction.done,
+      textCapitalization: TextCapitalization.words,
+      decoration: const InputDecoration(
+        labelText: 'Company Name',
+        hintText: 'Enter your company name',
+      ),
+      onChanged: (_) => setState(() {}),
+      onFieldSubmitted: (_) => _handleRegister(),
+      validator: (value) {
+        if (value == null || value.isEmpty) {
+          return 'Please enter your company name';
         }
         return null;
       },

@@ -1,6 +1,10 @@
 import 'package:flutter/material.dart';
+import 'package:provider/provider.dart';
 import '../../core/theme/app_colors.dart';
-import '../../models/driver.dart';
+import '../../data/models/driver_model.dart';
+import '../../providers/driver_provider.dart';
+import '../../providers/auth_provider.dart';
+import '../../services/permission_service.dart';
 
 class DriversTab extends StatefulWidget {
   const DriversTab({super.key});
@@ -10,33 +14,124 @@ class DriversTab extends StatefulWidget {
 }
 
 class _DriversTabState extends State<DriversTab> {
-  List<Driver> _drivers = [];
+  @override
+  void initState() {
+    super.initState();
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      context.read<DriverProvider>().loadDrivers();
+    });
+  }
 
   @override
   Widget build(BuildContext context) {
-    final textTheme = Theme.of(context).textTheme;
+    return Consumer<DriverProvider>(
+      builder: (context, driverProvider, child) {
+        final drivers = driverProvider.drivers;
+        final isLoading = driverProvider.isLoading;
+        final error = driverProvider.error;
 
-    return Scaffold(
-      backgroundColor: AppColors.background,
-      appBar: AppBar(
-        title: const Text('Drivers'),
-      ),
-      body: _drivers.isEmpty
-          ? _buildEmptyState(textTheme)
-          : _buildDriversList(textTheme),
-      floatingActionButton: FloatingActionButton(
-        onPressed: () {
-          Navigator.of(context).pushNamed('/add-driver').then((result) {
-            if (result != null && result is Driver) {
-              setState(() {
-                _drivers.add(result);
-              });
-            }
-          });
-        },
-        backgroundColor: AppColors.primary,
-        child: const Icon(Icons.add, color: AppColors.background),
-      ),
+        if (isLoading && drivers.isEmpty) {
+          return Scaffold(
+            backgroundColor: AppColors.background,
+            appBar: AppBar(
+              title: const Text('Drivers'),
+            ),
+            body: const Center(child: CircularProgressIndicator()),
+          );
+        }
+
+        if (error != null && drivers.isEmpty) {
+          return Scaffold(
+            backgroundColor: AppColors.background,
+            appBar: AppBar(
+              title: const Text('Drivers'),
+            ),
+            body: Center(
+              child: Column(
+                mainAxisAlignment: MainAxisAlignment.center,
+                children: [
+                  Icon(
+                    Icons.error_outline,
+                    size: 64.0,
+                    color: AppColors.error,
+                  ),
+                  const SizedBox(height: 16.0),
+                  Text(
+                    'Error loading drivers',
+                    style: Theme.of(context).textTheme.titleLarge,
+                  ),
+                  const SizedBox(height: 8.0),
+                  Text(
+                    error,
+                    style: Theme.of(context).textTheme.bodyMedium?.copyWith(
+                          color: AppColors.textSecondary,
+                        ),
+                    textAlign: TextAlign.center,
+                  ),
+                  const SizedBox(height: 24.0),
+                  ElevatedButton(
+                    onPressed: () => driverProvider.loadDrivers(refresh: true),
+                    child: const Text('Retry'),
+                  ),
+                ],
+              ),
+            ),
+          );
+        }
+
+        return Scaffold(
+          backgroundColor: AppColors.background,
+          appBar: AppBar(
+            title: const Text('Drivers'),
+            actions: [
+              IconButton(
+                icon: const Icon(Icons.refresh),
+                onPressed: isLoading
+                    ? null
+                    : () => driverProvider.loadDrivers(refresh: true),
+                tooltip: 'Refresh',
+              ),
+            ],
+          ),
+          body: RefreshIndicator(
+            onRefresh: () => driverProvider.loadDrivers(refresh: true),
+            child: drivers.isEmpty
+                ? _buildEmptyState(Theme.of(context).textTheme)
+                : _buildDriversList(drivers, Theme.of(context).textTheme),
+          ),
+          floatingActionButton: Consumer<AuthProvider>(
+            builder: (context, authProvider, child) {
+              final permissionService = PermissionService(authProvider);
+              // Only show "Add Driver" button if user has manageDrivers permission or is transporter
+              if (permissionService.hasPermission('manageDrivers') || permissionService.isTransporter) {
+                return FloatingActionButton(
+                  onPressed: () {
+                    Navigator.of(context).pushNamed('/add-driver').then((result) {
+                      if (result == true) {
+                        driverProvider.loadDrivers(refresh: true);
+                      }
+                    });
+                  },
+                  backgroundColor: AppColors.primary,
+                  child: const Icon(Icons.add, color: AppColors.background),
+                );
+              }
+              return const SizedBox.shrink();
+            },
+          ),
+        );
+      },
+    );
+  }
+
+  Widget _buildDriversList(List<DriverModel> drivers, TextTheme textTheme) {
+    return ListView.builder(
+      padding: const EdgeInsets.all(16.0),
+      itemCount: drivers.length,
+      itemBuilder: (context, index) {
+        final driver = drivers[index];
+        return _buildDriverCard(driver, textTheme);
+      },
     );
   }
 
@@ -62,7 +157,7 @@ class _DriversTabState extends State<DriversTab> {
             ),
             const SizedBox(height: 12.0),
             Text(
-              'Add your first driver to get started',
+              'Drivers are automatically created when they first login via OTP',
               style: textTheme.bodyMedium?.copyWith(
                 color: AppColors.textSecondary,
               ),
@@ -74,18 +169,7 @@ class _DriversTabState extends State<DriversTab> {
     );
   }
 
-  Widget _buildDriversList(TextTheme textTheme) {
-    return ListView.builder(
-      padding: const EdgeInsets.all(16.0),
-      itemCount: _drivers.length,
-      itemBuilder: (context, index) {
-        final driver = _drivers[index];
-        return _buildDriverCard(driver, textTheme);
-      },
-    );
-  }
-
-  Widget _buildDriverCard(Driver driver, TextTheme textTheme) {
+  Widget _buildDriverCard(DriverModel driver, TextTheme textTheme) {
     return Card(
       margin: const EdgeInsets.only(bottom: 12.0),
       elevation: 0,
@@ -104,7 +188,7 @@ class _DriversTabState extends State<DriversTab> {
         leading: CircleAvatar(
           backgroundColor: AppColors.offWhite,
           child: Text(
-            driver.name.isNotEmpty ? driver.name[0].toUpperCase() : 'D',
+            (driver.name?.isNotEmpty == true) ? driver.name![0].toUpperCase() : 'D',
             style: textTheme.titleMedium?.copyWith(
               color: AppColors.primary,
               fontWeight: FontWeight.bold,
@@ -112,7 +196,7 @@ class _DriversTabState extends State<DriversTab> {
           ),
         ),
         title: Text(
-          driver.name,
+          driver.name ?? 'Driver',
           style: textTheme.titleMedium?.copyWith(
             fontWeight: FontWeight.w600,
             color: AppColors.textPrimary,
@@ -121,42 +205,92 @@ class _DriversTabState extends State<DriversTab> {
         subtitle: Padding(
           padding: const EdgeInsets.only(top: 4.0),
           child: Text(
-            driver.phone,
+            driver.mobile,
             style: textTheme.bodyMedium?.copyWith(
               color: AppColors.textSecondary,
             ),
           ),
         ),
-        trailing: _buildStatusChip(driver.status),
+        trailing: Row(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            _buildStatusChip(driver.status),
+            const SizedBox(width: 8.0),
+            PopupMenuButton<String>(
+              icon: const Icon(Icons.more_vert),
+              onSelected: (value) async {
+                final driverProvider = context.read<DriverProvider>();
+                if (value == 'edit') {
+                  // TODO: Navigate to edit driver screen
+                  ScaffoldMessenger.of(context).showSnackBar(
+                    const SnackBar(content: Text('Edit driver feature coming soon')),
+                  );
+                } else if (value == 'delete') {
+                  final confirmed = await showDialog<bool>(
+                    context: context,
+                    builder: (context) => AlertDialog(
+                      title: const Text('Delete Driver'),
+                      content: Text('Are you sure you want to delete ${driver.name ?? 'this driver'}?'),
+                      actions: [
+                        TextButton(
+                          onPressed: () => Navigator.of(context).pop(false),
+                          child: const Text('Cancel'),
+                        ),
+                        TextButton(
+                          onPressed: () => Navigator.of(context).pop(true),
+                          child: const Text('Delete', style: TextStyle(color: AppColors.error)),
+                        ),
+                      ],
+                    ),
+                  );
+                  if (confirmed == true && mounted) {
+                    final success = await driverProvider.deleteDriver(driver.id);
+                    if (mounted) {
+                      ScaffoldMessenger.of(context).showSnackBar(
+                        SnackBar(
+                          content: Text(success ? 'Driver deleted successfully' : driverProvider.error ?? 'Failed to delete driver'),
+                          backgroundColor: success ? Colors.green : Colors.red,
+                        ),
+                      );
+                    }
+                  }
+                }
+              },
+              itemBuilder: (context) => [
+                const PopupMenuItem(value: 'edit', child: Text('Edit')),
+                const PopupMenuItem(value: 'delete', child: Text('Delete', style: TextStyle(color: AppColors.error))),
+              ],
+            ),
+          ],
+        ),
       ),
     );
   }
 
-  Widget _buildStatusChip(DriverStatus status) {
+  Widget _buildStatusChip(String status) {
     Color chipColor;
-    switch (status) {
-      case DriverStatus.active:
-        chipColor = AppColors.success;
-        break;
-      case DriverStatus.notInstalled:
-        chipColor = AppColors.warning;
-        break;
-      case DriverStatus.pending:
-        chipColor = AppColors.info;
-        break;
-    }
-
     String label;
-    switch (status) {
-      case DriverStatus.active:
+    
+    switch (status.toLowerCase()) {
+      case 'active':
+        chipColor = AppColors.success;
         label = 'Active';
         break;
-      case DriverStatus.notInstalled:
-        label = 'Not Installed';
+      case 'inactive':
+        chipColor = AppColors.warning;
+        label = 'Inactive';
         break;
-      case DriverStatus.pending:
+      case 'pending':
+        chipColor = AppColors.info;
         label = 'Pending';
         break;
+      case 'blocked':
+        chipColor = AppColors.error;
+        label = 'Blocked';
+        break;
+      default:
+        chipColor = AppColors.textMuted;
+        label = status;
     }
 
     return Container(

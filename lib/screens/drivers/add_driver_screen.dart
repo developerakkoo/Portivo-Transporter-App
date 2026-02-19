@@ -1,7 +1,8 @@
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
+import 'package:provider/provider.dart';
 import '../../core/theme/app_colors.dart';
-import '../../models/driver.dart';
+import '../../providers/driver_provider.dart';
 
 class AddDriverScreen extends StatefulWidget {
   const AddDriverScreen({super.key});
@@ -14,10 +15,9 @@ class _AddDriverScreenState extends State<AddDriverScreen> {
   final _formKey = GlobalKey<FormState>();
   final _nameController = TextEditingController();
   final _phoneController = TextEditingController();
-  DriverStatus _selectedStatus = DriverStatus.pending;
+  
+  String _selectedStatus = 'pending';
   bool _isLoading = false;
-  String? _selectedContactName;
-  String? _selectedContactPhone;
 
   @override
   void dispose() {
@@ -26,52 +26,54 @@ class _AddDriverScreenState extends State<AddDriverScreen> {
     super.dispose();
   }
 
-  Future<void> _selectFromContacts() async {
-    // TODO: Implement actual contact picker
-    // For now, show a dialog to simulate contact selection
-    final result = await showDialog<Map<String, String>>(
-      context: context,
-      builder: (context) => _ContactPickerDialog(),
-    );
-
-    if (result != null) {
-      setState(() {
-        _selectedContactName = result['name'];
-        _selectedContactPhone = result['phone'];
-        _nameController.text = _selectedContactName ?? '';
-        _phoneController.text = _selectedContactPhone ?? '';
-      });
-    }
-  }
-
-  void _clearContactSelection() {
-    setState(() {
-      _selectedContactName = null;
-      _selectedContactPhone = null;
-      _nameController.clear();
-      _phoneController.clear();
-    });
-  }
-
-  void _handleSave() {
+  Future<void> _handleSave() async {
     if (_formKey.currentState?.validate() ?? false) {
       setState(() {
         _isLoading = true;
       });
 
-      // Simulate API call
-      Future.delayed(const Duration(seconds: 1), () {
-        if (mounted) {
-          final newDriver = Driver(
-            id: DateTime.now().millisecondsSinceEpoch.toString(),
-            name: _nameController.text.trim(),
-            phone: _phoneController.text.trim(),
-            status: _selectedStatus,
-          );
+      try {
+        final driverProvider = context.read<DriverProvider>();
+        final driver = await driverProvider.createDriver(
+          mobile: _phoneController.text.trim(),
+          name: _nameController.text.trim(),
+          status: _selectedStatus,
+        );
 
-          Navigator.of(context).pop(newDriver);
+        if (mounted) {
+          if (driver != null) {
+            ScaffoldMessenger.of(context).showSnackBar(
+              const SnackBar(
+                content: Text('Driver created successfully'),
+                backgroundColor: Colors.green,
+              ),
+            );
+            Navigator.of(context).pop();
+          } else {
+            ScaffoldMessenger.of(context).showSnackBar(
+              SnackBar(
+                content: Text(driverProvider.error ?? 'Failed to create driver'),
+                backgroundColor: Colors.red,
+              ),
+            );
+          }
         }
-      });
+      } catch (e) {
+        if (mounted) {
+          ScaffoldMessenger.of(context).showSnackBar(
+            SnackBar(
+              content: Text('Error: $e'),
+              backgroundColor: Colors.red,
+            ),
+          );
+        }
+      } finally {
+        if (mounted) {
+          setState(() {
+            _isLoading = false;
+          });
+        }
+      }
     }
   }
 
@@ -93,295 +95,99 @@ class _AddDriverScreenState extends State<AddDriverScreen> {
             child: Column(
               crossAxisAlignment: CrossAxisAlignment.stretch,
               children: [
-                // Contact Selection Section
-                _buildContactSelectionSection(textTheme),
-
-                const SizedBox(height: 24.0),
-
                 // Name Field
-                _buildNameField(),
-
+                TextFormField(
+                  controller: _nameController,
+                  textInputAction: TextInputAction.next,
+                  textCapitalization: TextCapitalization.words,
+                  decoration: const InputDecoration(
+                    labelText: 'Driver Name',
+                    hintText: 'Enter driver name',
+                  ),
+                  validator: (value) {
+                    if (value == null || value.trim().isEmpty) {
+                      return 'Please enter driver name';
+                    }
+                    return null;
+                  },
+                ),
                 const SizedBox(height: 20.0),
 
                 // Phone Field
-                _buildPhoneField(),
-
+                TextFormField(
+                  controller: _phoneController,
+                  keyboardType: TextInputType.phone,
+                  textInputAction: TextInputAction.next,
+                  inputFormatters: [
+                    FilteringTextInputFormatter.digitsOnly,
+                  ],
+                  decoration: const InputDecoration(
+                    labelText: 'Phone Number',
+                    hintText: 'Enter 10-digit phone number',
+                  ),
+                  validator: (value) {
+                    if (value == null || value.trim().isEmpty) {
+                      return 'Please enter phone number';
+                    }
+                    if (value.length != 10) {
+                      return 'Phone number must be 10 digits';
+                    }
+                    return null;
+                  },
+                ),
                 const SizedBox(height: 20.0),
 
                 // Status Dropdown
-                _buildStatusDropdown(),
-
+                DropdownButtonFormField<String>(
+                  value: _selectedStatus,
+                  decoration: const InputDecoration(
+                    labelText: 'Status',
+                    hintText: 'Select status',
+                  ),
+                  items: const [
+                    DropdownMenuItem(value: 'pending', child: Text('Pending')),
+                    DropdownMenuItem(value: 'active', child: Text('Active')),
+                    DropdownMenuItem(value: 'inactive', child: Text('Inactive')),
+                    DropdownMenuItem(value: 'blocked', child: Text('Blocked')),
+                  ],
+                  onChanged: (value) {
+                    if (value != null) {
+                      setState(() {
+                        _selectedStatus = value;
+                      });
+                    }
+                  },
+                ),
                 const SizedBox(height: 32.0),
 
                 // Save Button
-                _buildSaveButton(theme),
-              ],
-            ),
-          ),
-        ),
-      ),
-    );
-  }
-
-  Widget _buildContactSelectionSection(TextTheme textTheme) {
-    return Column(
-      crossAxisAlignment: CrossAxisAlignment.start,
-      children: [
-        Text(
-          'Select Contact',
-          style: textTheme.titleMedium?.copyWith(
-            fontWeight: FontWeight.w600,
-            color: AppColors.textPrimary,
-          ),
-        ),
-        const SizedBox(height: 12.0),
-        if (_selectedContactName != null)
-          Container(
-            padding: const EdgeInsets.all(16.0),
-            decoration: BoxDecoration(
-              color: AppColors.offWhite,
-              borderRadius: BorderRadius.circular(12.0),
-              border: Border.all(
-                color: AppColors.dividerGrey,
-                width: 1.0,
-              ),
-            ),
-            child: Row(
-              children: [
-                Expanded(
-                  child: Column(
-                    crossAxisAlignment: CrossAxisAlignment.start,
-                    children: [
-                      Text(
-                        _selectedContactName!,
-                        style: textTheme.bodyLarge?.copyWith(
-                          fontWeight: FontWeight.w600,
-                          color: AppColors.textPrimary,
-                        ),
-                      ),
-                      const SizedBox(height: 4.0),
-                      Text(
-                        _selectedContactPhone!,
-                        style: textTheme.bodyMedium?.copyWith(
-                          color: AppColors.textSecondary,
-                        ),
-                      ),
-                    ],
+                SizedBox(
+                  height: 52.0,
+                  child: ElevatedButton(
+                    onPressed: _isLoading ? null : _handleSave,
+                    child: _isLoading
+                        ? const SizedBox(
+                            height: 20.0,
+                            width: 20.0,
+                            child: CircularProgressIndicator(
+                              strokeWidth: 2.0,
+                              valueColor: AlwaysStoppedAnimation<Color>(AppColors.background),
+                            ),
+                          )
+                        : Text(
+                            'Create Driver',
+                            style: textTheme.labelLarge?.copyWith(
+                              color: AppColors.background,
+                              fontWeight: FontWeight.w600,
+                            ),
+                          ),
                   ),
                 ),
-                IconButton(
-                  icon: const Icon(Icons.close),
-                  color: AppColors.textSecondary,
-                  onPressed: _clearContactSelection,
-                ),
               ],
             ),
-          )
-        else
-          SizedBox(
-            height: 52.0,
-            child: OutlinedButton.icon(
-              onPressed: _selectFromContacts,
-              icon: const Icon(Icons.contacts_outlined),
-              label: const Text('Select from Contacts'),
-              style: OutlinedButton.styleFrom(
-                side: const BorderSide(color: AppColors.primary),
-                shape: RoundedRectangleBorder(
-                  borderRadius: BorderRadius.circular(12.0),
-                ),
-              ),
-            ),
           ),
-      ],
-    );
-  }
-
-  Widget _buildNameField() {
-    return TextFormField(
-      controller: _nameController,
-      textInputAction: TextInputAction.next,
-      textCapitalization: TextCapitalization.words,
-      decoration: const InputDecoration(
-        labelText: 'Driver Name',
-        hintText: 'Enter driver name',
-      ),
-      validator: (value) {
-        if (value == null || value.trim().isEmpty) {
-          return 'Please enter driver name';
-        }
-        return null;
-      },
-    );
-  }
-
-  Widget _buildPhoneField() {
-    return TextFormField(
-      controller: _phoneController,
-      keyboardType: TextInputType.phone,
-      textInputAction: TextInputAction.done,
-      inputFormatters: [
-        FilteringTextInputFormatter.digitsOnly,
-      ],
-      decoration: const InputDecoration(
-        labelText: 'Phone Number',
-        hintText: 'Enter phone number',
-      ),
-      validator: (value) {
-        if (value == null || value.trim().isEmpty) {
-          return 'Please enter phone number';
-        }
-        if (value.length < 10) {
-          return 'Please enter a valid phone number';
-        }
-        return null;
-      },
-    );
-  }
-
-  Widget _buildStatusDropdown() {
-    return DropdownButtonFormField<DriverStatus>(
-      value: _selectedStatus,
-      decoration: const InputDecoration(
-        labelText: 'Status',
-        hintText: 'Select status',
-      ),
-      items: DriverStatus.values.map((status) {
-        String label;
-        switch (status) {
-          case DriverStatus.active:
-            label = 'Active';
-            break;
-          case DriverStatus.notInstalled:
-            label = 'Not Installed';
-            break;
-          case DriverStatus.pending:
-            label = 'Pending';
-            break;
-        }
-
-        return DropdownMenuItem<DriverStatus>(
-          value: status,
-          child: Text(label),
-        );
-      }).toList(),
-      onChanged: (value) {
-        if (value != null) {
-          setState(() {
-            _selectedStatus = value;
-          });
-        }
-      },
-    );
-  }
-
-  Widget _buildSaveButton(ThemeData theme) {
-    return SizedBox(
-      height: 52.0,
-      child: ElevatedButton(
-        onPressed: _isLoading ? null : _handleSave,
-        child: _isLoading
-            ? const SizedBox(
-                height: 20.0,
-                width: 20.0,
-                child: CircularProgressIndicator(
-                  strokeWidth: 2.0,
-                  valueColor: AlwaysStoppedAnimation<Color>(AppColors.background),
-                ),
-              )
-            : Text(
-                'Save Driver',
-                style: theme.textTheme.labelLarge?.copyWith(
-                  color: AppColors.background,
-                  fontWeight: FontWeight.w600,
-                ),
-              ),
-      ),
-    );
-  }
-}
-
-class _ContactPickerDialog extends StatelessWidget {
-  @override
-  Widget build(BuildContext context) {
-    final textTheme = Theme.of(context).textTheme;
-
-    // Simulated contacts list
-    final contacts = [
-      {'name': 'John Doe', 'phone': '+1234567890'},
-      {'name': 'Jane Smith', 'phone': '+0987654321'},
-      {'name': 'Mike Johnson', 'phone': '+1122334455'},
-    ];
-
-    return Dialog(
-      shape: RoundedRectangleBorder(
-        borderRadius: BorderRadius.circular(16.0),
-      ),
-      child: Container(
-        constraints: const BoxConstraints(maxHeight: 400),
-        child: Column(
-          mainAxisSize: MainAxisSize.min,
-          children: [
-            Padding(
-              padding: const EdgeInsets.all(16.0),
-              child: Text(
-                'Select Contact',
-                style: textTheme.titleLarge?.copyWith(
-                  fontWeight: FontWeight.bold,
-                  color: AppColors.textPrimary,
-                ),
-              ),
-            ),
-            const Divider(height: 1),
-            Flexible(
-              child: ListView.builder(
-                shrinkWrap: true,
-                itemCount: contacts.length,
-                itemBuilder: (context, index) {
-                  final contact = contacts[index];
-                  return ListTile(
-                    leading: CircleAvatar(
-                      backgroundColor: AppColors.offWhite,
-                      child: Text(
-                        contact['name']![0],
-                        style: textTheme.titleMedium?.copyWith(
-                          color: AppColors.primary,
-                          fontWeight: FontWeight.bold,
-                        ),
-                      ),
-                    ),
-                    title: Text(
-                      contact['name']!,
-                      style: textTheme.bodyLarge?.copyWith(
-                        color: AppColors.textPrimary,
-                      ),
-                    ),
-                    subtitle: Text(
-                      contact['phone']!,
-                      style: textTheme.bodyMedium?.copyWith(
-                        color: AppColors.textSecondary,
-                      ),
-                    ),
-                    onTap: () {
-                      Navigator.of(context).pop(contact);
-                    },
-                  );
-                },
-              ),
-            ),
-            const Divider(height: 1),
-            TextButton(
-              onPressed: () => Navigator.of(context).pop(),
-              child: Text(
-                'Cancel',
-                style: textTheme.bodyLarge?.copyWith(
-                  color: AppColors.textSecondary,
-                ),
-              ),
-            ),
-          ],
         ),
       ),
     );
   }
 }
-

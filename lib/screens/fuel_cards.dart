@@ -1,5 +1,10 @@
 import 'package:flutter/material.dart';
+import 'package:provider/provider.dart';
 import '../core/theme/app_colors.dart';
+import '../data/models/fuel_card_model.dart';
+import '../providers/fuel_provider.dart';
+import '../providers/auth_provider.dart';
+import '../services/permission_service.dart';
 
 class FuelCardsScreen extends StatefulWidget {
   const FuelCardsScreen({super.key});
@@ -9,67 +14,15 @@ class FuelCardsScreen extends StatefulWidget {
 }
 
 class _FuelCardsScreenState extends State<FuelCardsScreen> {
-  // Placeholder fuel cards data
-  List<Map<String, dynamic>> fuelCards = [
-    {
-      'id': '1',
-      'name': 'Shell Premium',
-      'cardNumber': '**** **** **** 1234',
-      'balance': 2500.00,
-      'qrCode': 'FC-2024-001',
-    },
-    {
-      'id': '2',
-      'name': 'BP Standard',
-      'cardNumber': '**** **** **** 5678',
-      'balance': 1800.00,
-      'qrCode': 'FC-2024-002',
-    },
-    {
-      'id': '3',
-      'name': 'Exxon Mobil',
-      'cardNumber': '**** **** **** 9012',
-      'balance': 3200.00,
-      'qrCode': 'FC-2024-003',
-    },
-  ];
-
-  void _addFuelCard() {
-    showDialog(
-      context: context,
-      builder: (context) => _AddFuelCardDialog(
-        onAdd: (name) {
-          setState(() {
-            final newCard = {
-              'id': DateTime.now().millisecondsSinceEpoch.toString(),
-              'name': name,
-              'cardNumber': '**** **** **** ${(1000 + fuelCards.length).toString()}',
-              'balance': 0.00,
-              'qrCode': 'FC-2024-${(100 + fuelCards.length + 1).toString()}',
-            };
-            fuelCards.add(newCard);
-          });
-        },
-      ),
-    );
+  @override
+  void initState() {
+    super.initState();
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      context.read<FuelProvider>().loadFuelCards();
+    });
   }
 
-  void _renameFuelCard(int index) {
-    final currentName = fuelCards[index]['name'] as String;
-    showDialog(
-      context: context,
-      builder: (context) => _RenameFuelCardDialog(
-        currentName: currentName,
-        onRename: (newName) {
-          setState(() {
-            fuelCards[index]['name'] = newName;
-          });
-        },
-      ),
-    );
-  }
-
-  void _viewQRCode(Map<String, dynamic> card) {
+  void _viewQRCode(FuelCardModel card) {
     Navigator.of(context).pushNamed(
       '/fuel-card-qr',
       arguments: card,
@@ -80,43 +33,100 @@ class _FuelCardsScreenState extends State<FuelCardsScreen> {
   Widget build(BuildContext context) {
     final textTheme = Theme.of(context).textTheme;
 
-    return Scaffold(
-      backgroundColor: AppColors.background,
-      appBar: AppBar(
-        title: const Text('Fuel Cards'),
-      ),
-      body: SafeArea(
-        child: Column(
-          children: [
-            // Add Fuel Card Button
-            Padding(
-              padding: const EdgeInsets.all(24.0),
-              child: SizedBox(
-                width: double.infinity,
-                height: 52.0,
-                child: ElevatedButton.icon(
-                  onPressed: _addFuelCard,
-                  icon: const Icon(Icons.add_circle_outline, size: 20.0),
-                  label: Text(
-                    'Add Fuel Card',
-                    style: textTheme.labelLarge?.copyWith(
-                      fontWeight: FontWeight.w600,
-                    ),
+    return Consumer<AuthProvider>(
+      builder: (context, authProvider, authChild) {
+        final permissionService = PermissionService(authProvider);
+        
+        // Check permission - redirect if unauthorized
+        if (!permissionService.hasPermission('manageFuelCards') && !permissionService.isTransporter) {
+          WidgetsBinding.instance.addPostFrameCallback((_) {
+            Navigator.of(context).pop();
+            ScaffoldMessenger.of(context).showSnackBar(
+              const SnackBar(
+                content: Text('You do not have permission to access fuel cards'),
+                backgroundColor: Colors.red,
+              ),
+            );
+          });
+          return Scaffold(
+            backgroundColor: AppColors.background,
+            appBar: AppBar(title: const Text('Fuel Cards')),
+            body: const Center(child: CircularProgressIndicator()),
+          );
+        }
+
+        return Consumer<FuelProvider>(
+          builder: (context, fuelProvider, child) {
+        final fuelCards = fuelProvider.fuelCards;
+        final isLoading = fuelProvider.isLoading;
+        final error = fuelProvider.error;
+
+        if (isLoading && fuelCards.isEmpty) {
+          return Scaffold(
+            backgroundColor: AppColors.background,
+            appBar: AppBar(
+              title: const Text('Fuel Cards'),
+            ),
+            body: const Center(child: CircularProgressIndicator()),
+          );
+        }
+
+        if (error != null && fuelCards.isEmpty) {
+          return Scaffold(
+            backgroundColor: AppColors.background,
+            appBar: AppBar(
+              title: const Text('Fuel Cards'),
+            ),
+            body: Center(
+              child: Column(
+                mainAxisAlignment: MainAxisAlignment.center,
+                children: [
+                  Icon(
+                    Icons.error_outline,
+                    size: 64.0,
+                    color: AppColors.error,
                   ),
-                  style: ElevatedButton.styleFrom(
-                    backgroundColor: AppColors.primary,
-                    foregroundColor: AppColors.background,
-                    elevation: 0,
-                    shape: RoundedRectangleBorder(
-                      borderRadius: BorderRadius.circular(12.0),
-                    ),
+                  const SizedBox(height: 16.0),
+                  Text(
+                    'Error loading fuel cards',
+                    style: textTheme.titleLarge,
                   ),
-                ),
+                  const SizedBox(height: 8.0),
+                  Text(
+                    error,
+                    style: textTheme.bodyMedium?.copyWith(
+                      color: AppColors.textSecondary,
+                    ),
+                    textAlign: TextAlign.center,
+                  ),
+                  const SizedBox(height: 24.0),
+                  ElevatedButton(
+                    onPressed: () => fuelProvider.loadFuelCards(refresh: true),
+                    child: const Text('Retry'),
+                  ),
+                ],
               ),
             ),
+          );
+        }
 
-            // Fuel Cards List
-            Expanded(
+        return Scaffold(
+          backgroundColor: AppColors.background,
+          appBar: AppBar(
+            title: const Text('Fuel Cards'),
+            actions: [
+              IconButton(
+                icon: const Icon(Icons.refresh),
+                onPressed: isLoading
+                    ? null
+                    : () => fuelProvider.loadFuelCards(refresh: true),
+                tooltip: 'Refresh',
+              ),
+            ],
+          ),
+          body: SafeArea(
+            child: RefreshIndicator(
+              onRefresh: () => fuelProvider.loadFuelCards(refresh: true),
               child: fuelCards.isEmpty
                   ? Center(
                       child: Column(
@@ -138,31 +148,31 @@ class _FuelCardsScreenState extends State<FuelCardsScreen> {
                       ),
                     )
                   : ListView.builder(
-                      padding: const EdgeInsets.symmetric(horizontal: 24.0),
+                      padding: const EdgeInsets.symmetric(horizontal: 24.0, vertical: 16.0),
                       itemCount: fuelCards.length,
                       itemBuilder: (context, index) {
                         return _buildFuelCard(
                           fuelCards[index],
-                          index,
                           textTheme,
                         );
                       },
                     ),
             ),
-          ],
-        ),
-      ),
+          ),
+        );
+      },
+    );
+      },
     );
   }
 
   Widget _buildFuelCard(
-    Map<String, dynamic> card,
-    int index,
+    FuelCardModel card,
     TextTheme textTheme,
   ) {
-    final name = card['name'] as String;
-    final cardNumber = card['cardNumber'] as String;
-    final balance = card['balance'] as double;
+    final cardNumber = card.cardNumber.length > 4
+        ? '**** **** **** ${card.cardNumber.substring(card.cardNumber.length - 4)}'
+        : card.cardNumber;
 
     return Container(
       margin: const EdgeInsets.only(bottom: 16.0),
@@ -192,29 +202,13 @@ class _FuelCardsScreenState extends State<FuelCardsScreen> {
             child: Column(
               crossAxisAlignment: CrossAxisAlignment.start,
               children: [
-                // Card Name with Rename Icon
-                Row(
-                  mainAxisAlignment: MainAxisAlignment.spaceBetween,
-                  children: [
-                    Expanded(
-                      child: Text(
-                        name,
-                        style: textTheme.titleLarge?.copyWith(
-                          fontWeight: FontWeight.bold,
-                          color: AppColors.background,
-                        ),
-                      ),
-                    ),
-                    IconButton(
-                      icon: const Icon(
-                        Icons.edit_outlined,
-                        color: AppColors.background,
-                        size: 20.0,
-                      ),
-                      onPressed: () => _renameFuelCard(index),
-                      tooltip: 'Rename',
-                    ),
-                  ],
+                // Card Number
+                Text(
+                  'Fuel Card',
+                  style: textTheme.titleLarge?.copyWith(
+                    fontWeight: FontWeight.bold,
+                    color: AppColors.background,
+                  ),
                 ),
                 const SizedBox(height: 24.0),
                 Text(
@@ -253,7 +247,7 @@ class _FuelCardsScreenState extends State<FuelCardsScreen> {
                         ),
                         const SizedBox(height: 4.0),
                         Text(
-                          '\$${balance.toStringAsFixed(2)}',
+                          '₹${card.balance.toStringAsFixed(2)}',
                           style: textTheme.headlineSmall?.copyWith(
                             fontWeight: FontWeight.bold,
                             color: AppColors.background,
@@ -292,152 +286,3 @@ class _FuelCardsScreenState extends State<FuelCardsScreen> {
   }
 }
 
-// Add Fuel Card Dialog
-class _AddFuelCardDialog extends StatefulWidget {
-  final Function(String) onAdd;
-
-  const _AddFuelCardDialog({required this.onAdd});
-
-  @override
-  State<_AddFuelCardDialog> createState() => _AddFuelCardDialogState();
-}
-
-class _AddFuelCardDialogState extends State<_AddFuelCardDialog> {
-  final _nameController = TextEditingController();
-
-  @override
-  void dispose() {
-    _nameController.dispose();
-    super.dispose();
-  }
-
-  @override
-  Widget build(BuildContext context) {
-    final textTheme = Theme.of(context).textTheme;
-
-    return AlertDialog(
-      backgroundColor: AppColors.background,
-      shape: RoundedRectangleBorder(
-        borderRadius: BorderRadius.circular(16.0),
-      ),
-      title: Text(
-        'Add Fuel Card',
-        style: textTheme.titleLarge?.copyWith(
-          fontWeight: FontWeight.bold,
-          color: AppColors.textPrimary,
-        ),
-      ),
-      content: TextField(
-        controller: _nameController,
-        decoration: const InputDecoration(
-          labelText: 'Fuel Card Name',
-          hintText: 'Enter fuel card name',
-        ),
-        autofocus: true,
-        textCapitalization: TextCapitalization.words,
-      ),
-      actions: [
-        TextButton(
-          onPressed: () => Navigator.of(context).pop(),
-          child: Text(
-            'Cancel',
-            style: TextStyle(color: AppColors.textSecondary),
-          ),
-        ),
-        ElevatedButton(
-          onPressed: () {
-            if (_nameController.text.trim().isNotEmpty) {
-              widget.onAdd(_nameController.text.trim());
-              Navigator.of(context).pop();
-            }
-          },
-          style: ElevatedButton.styleFrom(
-            backgroundColor: AppColors.primary,
-            foregroundColor: AppColors.background,
-          ),
-          child: const Text('Add'),
-        ),
-      ],
-    );
-  }
-}
-
-// Rename Fuel Card Dialog
-class _RenameFuelCardDialog extends StatefulWidget {
-  final String currentName;
-  final Function(String) onRename;
-
-  const _RenameFuelCardDialog({
-    required this.currentName,
-    required this.onRename,
-  });
-
-  @override
-  State<_RenameFuelCardDialog> createState() => _RenameFuelCardDialogState();
-}
-
-class _RenameFuelCardDialogState extends State<_RenameFuelCardDialog> {
-  late TextEditingController _nameController;
-
-  @override
-  void initState() {
-    super.initState();
-    _nameController = TextEditingController(text: widget.currentName);
-  }
-
-  @override
-  void dispose() {
-    _nameController.dispose();
-    super.dispose();
-  }
-
-  @override
-  Widget build(BuildContext context) {
-    final textTheme = Theme.of(context).textTheme;
-
-    return AlertDialog(
-      backgroundColor: AppColors.background,
-      shape: RoundedRectangleBorder(
-        borderRadius: BorderRadius.circular(16.0),
-      ),
-      title: Text(
-        'Rename Fuel Card',
-        style: textTheme.titleLarge?.copyWith(
-          fontWeight: FontWeight.bold,
-          color: AppColors.textPrimary,
-        ),
-      ),
-      content: TextField(
-        controller: _nameController,
-        decoration: const InputDecoration(
-          labelText: 'Fuel Card Name',
-          hintText: 'Enter fuel card name',
-        ),
-        autofocus: true,
-        textCapitalization: TextCapitalization.words,
-      ),
-      actions: [
-        TextButton(
-          onPressed: () => Navigator.of(context).pop(),
-          child: Text(
-            'Cancel',
-            style: TextStyle(color: AppColors.textSecondary),
-          ),
-        ),
-        ElevatedButton(
-          onPressed: () {
-            if (_nameController.text.trim().isNotEmpty) {
-              widget.onRename(_nameController.text.trim());
-              Navigator.of(context).pop();
-            }
-          },
-          style: ElevatedButton.styleFrom(
-            backgroundColor: AppColors.primary,
-            foregroundColor: AppColors.background,
-          ),
-          child: const Text('Save'),
-        ),
-      ],
-    );
-  }
-}

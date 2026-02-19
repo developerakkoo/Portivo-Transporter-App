@@ -1,5 +1,7 @@
 import 'package:flutter/material.dart';
+import 'package:qr_flutter/qr_flutter.dart';
 import '../core/theme/app_colors.dart';
+import '../data/models/fuel_card_model.dart';
 
 class FuelCardQRScreen extends StatelessWidget {
   const FuelCardQRScreen({super.key});
@@ -7,9 +9,22 @@ class FuelCardQRScreen extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     final textTheme = Theme.of(context).textTheme;
-    final card = ModalRoute.of(context)!.settings.arguments as Map<String, dynamic>;
-    final cardName = card['name'] as String;
-    final qrCode = card['qrCode'] as String;
+    final args = ModalRoute.of(context)?.settings.arguments;
+    
+    // Support both old Map format and new FuelCardModel
+    String cardNumber;
+    String qrData;
+    
+    if (args is FuelCardModel) {
+      cardNumber = args.cardNumber;
+      qrData = args.id; // Use card ID as QR data, or generate QR code
+    } else if (args is Map) {
+      cardNumber = args['cardNumber'] ?? args['name'] ?? 'Fuel Card';
+      qrData = args['qrCode'] ?? args['id'] ?? '';
+    } else {
+      cardNumber = 'Fuel Card';
+      qrData = '';
+    }
 
     return Scaffold(
       backgroundColor: AppColors.background,
@@ -23,9 +38,9 @@ class FuelCardQRScreen extends StatelessWidget {
             child: Column(
               mainAxisAlignment: MainAxisAlignment.center,
               children: [
-                // Card Name
+                // Card Number
                 Text(
-                  cardName,
+                  cardNumber,
                   style: textTheme.headlineSmall?.copyWith(
                     fontWeight: FontWeight.bold,
                     color: AppColors.textPrimary,
@@ -33,7 +48,7 @@ class FuelCardQRScreen extends StatelessWidget {
                 ),
                 const SizedBox(height: 32.0),
 
-                // QR Code Display (Placeholder)
+                // QR Code Display
                 Container(
                   width: 280,
                   height: 280,
@@ -53,25 +68,30 @@ class FuelCardQRScreen extends StatelessWidget {
                       ),
                     ],
                   ),
-                  child: Column(
-                    mainAxisAlignment: MainAxisAlignment.center,
-                    children: [
-                      Icon(
-                        Icons.qr_code,
-                        size: 120.0,
-                        color: AppColors.primary,
-                      ),
-                      const SizedBox(height: 16.0),
-                      Text(
-                        qrCode,
-                        style: textTheme.titleMedium?.copyWith(
-                          fontWeight: FontWeight.bold,
-                          color: AppColors.textPrimary,
-                          letterSpacing: 2.0,
+                  child: qrData.isNotEmpty
+                      ? QrImageView(
+                          data: qrData,
+                          version: QrVersions.auto,
+                          size: 232.0,
+                          backgroundColor: AppColors.background,
+                        )
+                      : Column(
+                          mainAxisAlignment: MainAxisAlignment.center,
+                          children: [
+                            Icon(
+                              Icons.qr_code,
+                              size: 120.0,
+                              color: AppColors.primary,
+                            ),
+                            const SizedBox(height: 16.0),
+                            Text(
+                              'No QR data available',
+                              style: textTheme.bodyMedium?.copyWith(
+                                color: AppColors.textSecondary,
+                              ),
+                            ),
+                          ],
                         ),
-                      ),
-                    ],
-                  ),
                 ),
                 const SizedBox(height: 32.0),
 

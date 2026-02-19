@@ -1,7 +1,9 @@
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
+import 'package:provider/provider.dart';
 import '../../core/theme/app_colors.dart';
-import '../../models/app_user.dart';
+import '../../data/models/company_user_model.dart';
+import '../../providers/company_user_provider.dart';
 
 enum PinSetupStep {
   enter,
@@ -38,10 +40,10 @@ class _AddEditUserScreenState extends State<AddEditUserScreen> {
     (_) => FocusNode(),
   );
 
-  AppUser? _existingUser;
+  CompanyUserModel? _existingUser;
   String _mode = 'add'; // 'add', 'edit', 'set-pin'
   bool _hasAccess = true;
-  Set<UserPermission> _selectedPermissions = {};
+  Set<String> _selectedPermissions = {};
   PinSetupStep _pinStep = PinSetupStep.enter;
   bool _isLoading = false;
   String? _pinErrorMessage;
@@ -53,11 +55,11 @@ class _AddEditUserScreenState extends State<AddEditUserScreen> {
     final args = ModalRoute.of(context)?.settings.arguments as Map<String, dynamic>?;
     if (args != null) {
       _mode = args['mode'] ?? 'add';
-      _existingUser = args['user'] as AppUser?;
+      _existingUser = args['user'] as CompanyUserModel?;
       
       if (_existingUser != null) {
         _nameController.text = _existingUser!.name;
-        _phoneController.text = _existingUser!.phone;
+        _phoneController.text = _existingUser!.mobile;
         _emailController.text = _existingUser!.email ?? '';
         _hasAccess = _existingUser!.hasAccess;
         _selectedPermissions = Set.from(_existingUser!.permissions);
@@ -130,9 +132,10 @@ class _AddEditUserScreenState extends State<AddEditUserScreen> {
     }
   }
 
-  void _handleSave() {
+  Future<void> _handleSave() async {
     if (_formKey.currentState?.validate() ?? false) {
       // Validate PIN if access is enabled
+      String? pinToSet;
       if (_hasAccess && _showPinSection) {
         if (!_isPinComplete(_pinControllers) || !_isPinComplete(_confirmPinControllers)) {
           setState(() {
@@ -154,6 +157,7 @@ class _AddEditUserScreenState extends State<AddEditUserScreen> {
           _confirmFocusNodes[0].requestFocus();
           return;
         }
+        pinToSet = enteredPin;
       }
 
       // Validate permissions
@@ -169,48 +173,124 @@ class _AddEditUserScreenState extends State<AddEditUserScreen> {
 
       setState(() {
         _isLoading = true;
+        _pinErrorMessage = null;
       });
 
-      Future.delayed(const Duration(seconds: 1), () {
-        if (mounted) {
-          final now = DateTime.now();
-          final user = _existingUser?.copyWith(
-                name: _nameController.text.trim(),
-                phone: _phoneController.text.trim(),
-                email: _emailController.text.trim().isEmpty
-                    ? null
-                    : _emailController.text.trim(),
-                pin: _hasAccess && _showPinSection
-                    ? _getPin(_pinControllers)
-                    : _existingUser?.pin,
-                hasAccess: _hasAccess,
-                permissions: _selectedPermissions.toList(),
-                updatedAt: now,
-              ) ??
-              AppUser(
-                id: DateTime.now().millisecondsSinceEpoch.toString(),
-                name: _nameController.text.trim(),
-                phone: _phoneController.text.trim(),
-                email: _emailController.text.trim().isEmpty
-                    ? null
-                    : _emailController.text.trim(),
-                pin: _hasAccess && _showPinSection
-                    ? _getPin(_pinControllers)
-                    : null,
-                hasAccess: _hasAccess,
-                permissions: _selectedPermissions.toList(),
-                createdAt: now,
-                updatedAt: now,
+      try {
+        final provider = context.read<CompanyUserProvider>();
+        
+        if (_mode == 'set-pin' && _existingUser != null && pinToSet != null) {
+          // Just set PIN
+          final success = await provider.setPin(_existingUser!.id, pinToSet);
+          if (mounted) {
+            if (success) {
+              ScaffoldMessenger.of(context).showSnackBar(
+                const SnackBar(
+                  content: Text('PIN set successfully'),
+                  backgroundColor: Colors.green,
+                ),
               );
-
-          Navigator.of(context).pop(user);
+              Navigator.of(context).pop();
+            } else {
+              ScaffoldMessenger.of(context).showSnackBar(
+                SnackBar(
+                  content: Text(provider.error ?? 'Failed to set PIN'),
+                  backgroundColor: Colors.red,
+                ),
+              );
+            }
+          }
+        } else if (_existingUser != null) {
+          // Update existing user
+          final userData = {
+            'name': _nameController.text.trim(),
+            'email': _emailController.text.trim().isEmpty
+                ? null
+                : _emailController.text.trim(),
+            'permissions': _selectedPermissions.toList(),
+            'hasAccess': _hasAccess,
+          };
+          
+          final success = await provider.updateUser(_existingUser!.id, userData);
+          
+          if (success && pinToSet != null) {
+            // Set PIN separately
+            await provider.setPin(_existingUser!.id, pinToSet);
+          }
+          
+          if (mounted) {
+            if (success) {
+              ScaffoldMessenger.of(context).showSnackBar(
+                const SnackBar(
+                  content: Text('User updated successfully'),
+                  backgroundColor: Colors.green,
+                ),
+              );
+              Navigator.of(context).pop();
+            } else {
+              ScaffoldMessenger.of(context).showSnackBar(
+                SnackBar(
+                  content: Text(provider.error ?? 'Failed to update user'),
+                  backgroundColor: Colors.red,
+                ),
+              );
+            }
+          }
+        } else {
+          // Create new user
+          final userData = {
+            'mobile': _phoneController.text.trim(),
+            'name': _nameController.text.trim(),
+            'email': _emailController.text.trim().isEmpty
+                ? null
+                : _emailController.text.trim(),
+            'permissions': _selectedPermissions.toList(),
+            'hasAccess': _hasAccess,
+            if (pinToSet != null) 'pin': pinToSet,
+          };
+          
+          final user = await provider.createUser(userData);
+          
+          if (mounted) {
+            if (user != null) {
+              ScaffoldMessenger.of(context).showSnackBar(
+                const SnackBar(
+                  content: Text('User created successfully'),
+                  backgroundColor: Colors.green,
+                ),
+              );
+              Navigator.of(context).pop();
+            } else {
+              ScaffoldMessenger.of(context).showSnackBar(
+                SnackBar(
+                  content: Text(provider.error ?? 'Failed to create user'),
+                  backgroundColor: Colors.red,
+                ),
+              );
+            }
+          }
         }
-      });
+      } catch (e) {
+        if (mounted) {
+          ScaffoldMessenger.of(context).showSnackBar(
+            SnackBar(
+              content: Text('Error: $e'),
+              backgroundColor: Colors.red,
+            ),
+          );
+        }
+      } finally {
+        if (mounted) {
+          setState(() {
+            _isLoading = false;
+          });
+        }
+      }
     }
   }
 
-  void _handleDelete() {
-    showDialog(
+  Future<void> _handleDelete() async {
+    final confirmed = await showDialog<bool>(
       context: context,
       builder: (context) => AlertDialog(
         title: const Text('Delete User'),
@@ -219,7 +299,7 @@ class _AddEditUserScreenState extends State<AddEditUserScreen> {
         ),
         actions: [
           TextButton(
-            onPressed: () => Navigator.of(context).pop(),
+            onPressed: () => Navigator.of(context).pop(false),
             child: Text(
               'Cancel',
               style: Theme.of(context).textTheme.bodyLarge?.copyWith(
@@ -228,10 +308,7 @@ class _AddEditUserScreenState extends State<AddEditUserScreen> {
             ),
           ),
           TextButton(
-            onPressed: () {
-              Navigator.of(context).pop();
-              Navigator.of(context).pop(_existingUser);
-            },
+            onPressed: () => Navigator.of(context).pop(true),
             child: Text(
               'Delete',
               style: Theme.of(context).textTheme.bodyLarge?.copyWith(
@@ -243,6 +320,51 @@ class _AddEditUserScreenState extends State<AddEditUserScreen> {
         ],
       ),
     );
+
+    if (confirmed == true && _existingUser != null && mounted) {
+      setState(() {
+        _isLoading = true;
+      });
+
+      try {
+        final provider = context.read<CompanyUserProvider>();
+        final success = await provider.deleteUser(_existingUser!.id);
+        
+        if (mounted) {
+          if (success) {
+            ScaffoldMessenger.of(context).showSnackBar(
+              const SnackBar(
+                content: Text('User deleted successfully'),
+                backgroundColor: Colors.green,
+              ),
+            );
+            Navigator.of(context).pop();
+          } else {
+            ScaffoldMessenger.of(context).showSnackBar(
+              SnackBar(
+                content: Text(provider.error ?? 'Failed to delete user'),
+                backgroundColor: Colors.red,
+              ),
+            );
+          }
+        }
+      } catch (e) {
+        if (mounted) {
+          ScaffoldMessenger.of(context).showSnackBar(
+            SnackBar(
+              content: Text('Error: $e'),
+              backgroundColor: Colors.red,
+            ),
+          );
+        }
+      } finally {
+        if (mounted) {
+          setState(() {
+            _isLoading = false;
+          });
+        }
+      }
+    }
   }
 
   @override
@@ -538,6 +660,17 @@ class _AddEditUserScreenState extends State<AddEditUserScreen> {
   }
 
   Widget _buildPermissionsSection() {
+    final allPermissions = [
+      'viewTrips',
+      'createTrips',
+      'manageDrivers',
+      'manageVehicles',
+      'manageWallet',
+      'manageFuelCards',
+      'manageUsers',
+      'viewReports',
+    ];
+
     return Column(
       children: [
         Row(
@@ -552,15 +685,15 @@ class _AddEditUserScreenState extends State<AddEditUserScreen> {
             TextButton(
               onPressed: () {
                 setState(() {
-                  if (_selectedPermissions.length == UserPermission.values.length) {
+                  if (_selectedPermissions.length == allPermissions.length) {
                     _selectedPermissions.clear();
                   } else {
-                    _selectedPermissions = Set.from(UserPermission.values);
+                    _selectedPermissions = Set.from(allPermissions);
                   }
                 });
               },
               child: Text(
-                _selectedPermissions.length == UserPermission.values.length
+                _selectedPermissions.length == allPermissions.length
                     ? 'Deselect All'
                     : 'Select All',
                 style: Theme.of(context).textTheme.bodySmall?.copyWith(
@@ -571,14 +704,14 @@ class _AddEditUserScreenState extends State<AddEditUserScreen> {
           ],
         ),
         const SizedBox(height: 8.0),
-        ...UserPermission.values.map((permission) {
+        ...allPermissions.map((permission) {
           return _buildPermissionCheckbox(permission);
         }),
       ],
     );
   }
 
-  Widget _buildPermissionCheckbox(UserPermission permission) {
+  Widget _buildPermissionCheckbox(String permission) {
     final label = _getPermissionLabel(permission);
     final isSelected = _selectedPermissions.contains(permission);
 
@@ -604,24 +737,26 @@ class _AddEditUserScreenState extends State<AddEditUserScreen> {
     );
   }
 
-  String _getPermissionLabel(UserPermission permission) {
+  String _getPermissionLabel(String permission) {
     switch (permission) {
-      case UserPermission.viewTrips:
+      case 'viewTrips':
         return 'View Trips';
-      case UserPermission.createTrips:
+      case 'createTrips':
         return 'Create Trips';
-      case UserPermission.manageDrivers:
+      case 'manageDrivers':
         return 'Manage Drivers';
-      case UserPermission.manageVehicles:
+      case 'manageVehicles':
         return 'Manage Vehicles';
-      case UserPermission.manageWallet:
+      case 'manageWallet':
         return 'Manage Wallet';
-      case UserPermission.manageFuelCards:
+      case 'manageFuelCards':
         return 'Manage Fuel Cards';
-      case UserPermission.manageUsers:
+      case 'manageUsers':
         return 'Manage Users';
-      case UserPermission.viewReports:
+      case 'viewReports':
         return 'View Reports';
+      default:
+        return permission;
     }
   }
 

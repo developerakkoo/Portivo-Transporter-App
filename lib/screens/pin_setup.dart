@@ -1,6 +1,11 @@
+import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
+import 'package:provider/provider.dart';
 import '../core/theme/app_colors.dart';
+import '../services/auth_service.dart';
+import '../providers/auth_provider.dart';
+import '../services/socket_service.dart';
 
 enum PinSetupStep {
   enter,
@@ -8,7 +13,8 @@ enum PinSetupStep {
 }
 
 class PinSetupScreen extends StatefulWidget {
-  const PinSetupScreen({super.key});
+  final String? mobileNumber;
+  const PinSetupScreen({super.key, this.mobileNumber});
 
   @override
   State<PinSetupScreen> createState() => _PinSetupScreenState();
@@ -111,7 +117,7 @@ class _PinSetupScreenState extends State<PinSetupScreen> {
     }
   }
 
-  void _handleSavePin() {
+  Future<void> _handleSavePin() async {
     final enteredPin = _getPin(_pinControllers);
     final confirmedPin = _getPin(_confirmPinControllers);
 
@@ -139,17 +145,67 @@ class _PinSetupScreenState extends State<PinSetupScreen> {
       _errorMessage = null;
     });
 
-    // TODO: Implement actual PIN save logic
-    // Simulate loading for demonstration
-    Future.delayed(const Duration(seconds: 1), () {
+    try {
+      final authService = AuthService();
+      final success = await authService.setPin(enteredPin);
+      
+      // Verify token exists after PIN setup
+      if (success) {
+        final token = await authService.getAccessToken();
+        if (kDebugMode) {
+          print('PinSetupScreen: Token verification after PIN setup: ${token != null}');
+        }
+        if (token == null) {
+          setState(() {
+            _errorMessage = 'Failed to save authentication token. Please try logging in again.';
+            _isLoading = false;
+          });
+          return;
+        }
+      }
+
+      if (mounted) {
+        if (success) {
+          // Connect Socket.IO after PIN setup
+          final authProvider = Provider.of<AuthProvider>(context, listen: false);
+          if (authProvider.user != null) {
+            try {
+              final socketService = SocketService();
+              await socketService.connect();
+              socketService.joinTransporterRoom(authProvider.user!.id);
+            } catch (e) {
+              // Socket.IO connection failure is non-critical
+              if (kDebugMode) {
+                print('PinSetupScreen: Socket.IO connection failed (non-critical): $e');
+              }
+            }
+          }
+
+          // Show success message
+          ScaffoldMessenger.of(context).showSnackBar(
+            const SnackBar(
+              content: Text('PIN set successfully'),
+              backgroundColor: Colors.green,
+            ),
+          );
+
+          // Navigate to home screen after PIN setup
+          Navigator.of(context).pushReplacementNamed('/home');
+        } else {
+          setState(() {
+            _isLoading = false;
+            _errorMessage = 'Failed to set PIN. Please try again.';
+          });
+        }
+      }
+    } catch (e) {
       if (mounted) {
         setState(() {
           _isLoading = false;
+          _errorMessage = 'Error setting PIN: ${e.toString().replaceFirst('Exception: ', '')}';
         });
-        // Navigate to home screen after PIN setup
-        Navigator.of(context).pushReplacementNamed('/home');
       }
-    });
+    }
   }
 
   bool get _canSave {

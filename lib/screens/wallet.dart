@@ -1,95 +1,138 @@
 import 'package:flutter/material.dart';
+import 'package:provider/provider.dart';
 import '../core/theme/app_colors.dart';
+import '../providers/wallet_provider.dart';
+import '../data/models/wallet_transaction_model.dart';
+import '../providers/auth_provider.dart';
+import '../services/permission_service.dart';
 
-class WalletScreen extends StatelessWidget {
+class WalletScreen extends StatefulWidget {
   const WalletScreen({super.key});
 
-  // Placeholder data
-  static const double availableBalance = 12500.00;
+  @override
+  State<WalletScreen> createState() => _WalletScreenState();
+}
+
+class _WalletScreenState extends State<WalletScreen> {
+  @override
+  void initState() {
+    super.initState();
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      final walletProvider = context.read<WalletProvider>();
+      walletProvider.loadBalance();
+      walletProvider.loadTransactions();
+    });
+  }
+
+  // Placeholder limits (can be fetched from backend if available)
   static const double dailyTransferLimit = 50000.00;
   static const double monthlyTransferLimit = 500000.00;
-
-  static final List<Map<String, dynamic>> transactions = [
-    {
-      'id': '1',
-      'type': 'credit',
-      'amount': 5000.00,
-      'description': 'Trip Payment - CONT-2024-001',
-      'date': '2024-01-15',
-      'time': '14:30',
-      'status': 'completed',
-    },
-    {
-      'id': '2',
-      'type': 'debit',
-      'amount': 2500.00,
-      'description': 'Fuel Payment',
-      'date': '2024-01-14',
-      'time': '10:15',
-      'status': 'completed',
-    },
-    {
-      'id': '3',
-      'type': 'credit',
-      'amount': 3000.00,
-      'description': 'Trip Payment - CONT-2024-002',
-      'date': '2024-01-13',
-      'time': '16:45',
-      'status': 'completed',
-    },
-    {
-      'id': '4',
-      'type': 'debit',
-      'amount': 1500.00,
-      'description': 'Driver Payment',
-      'date': '2024-01-12',
-      'time': '09:20',
-      'status': 'completed',
-    },
-    {
-      'id': '5',
-      'type': 'credit',
-      'amount': 7500.00,
-      'description': 'Trip Payment - CONT-2024-003',
-      'date': '2024-01-11',
-      'time': '11:00',
-      'status': 'completed',
-    },
-  ];
 
   @override
   Widget build(BuildContext context) {
     final textTheme = Theme.of(context).textTheme;
 
-    return Scaffold(
-      backgroundColor: AppColors.background,
-      appBar: AppBar(
-        title: const Text('Wallet'),
-      ),
-      body: SafeArea(
-        child: SingleChildScrollView(
-          padding: const EdgeInsets.all(24.0),
-          child: Column(
-            crossAxisAlignment: CrossAxisAlignment.stretch,
-            children: [
-              // Balance Card
-              _buildBalanceCard(textTheme),
-              const SizedBox(height: 24.0),
+    return Consumer<AuthProvider>(
+      builder: (context, authProvider, authChild) {
+        final permissionService = PermissionService(authProvider);
+        
+        // Check permission - redirect if unauthorized
+        if (!permissionService.hasPermission('manageWallet') && !permissionService.isTransporter) {
+          WidgetsBinding.instance.addPostFrameCallback((_) {
+            Navigator.of(context).pop();
+            ScaffoldMessenger.of(context).showSnackBar(
+              const SnackBar(
+                content: Text('You do not have permission to access wallet'),
+                backgroundColor: Colors.red,
+              ),
+            );
+          });
+          return Scaffold(
+            backgroundColor: AppColors.background,
+            appBar: AppBar(title: const Text('Wallet')),
+            body: const Center(child: CircularProgressIndicator()),
+          );
+        }
 
-              // Action Buttons
-              _buildActionButtons(context, textTheme),
-              const SizedBox(height: 32.0),
+        return Consumer<WalletProvider>(
+      builder: (context, walletProvider, child) {
+        final balance = walletProvider.balance;
+        final transactions = walletProvider.transactions;
+        final isLoading = walletProvider.isLoading;
+        final error = walletProvider.error;
 
-              // Recent Transactions
-              _buildTransactionsSection(textTheme),
+        return Scaffold(
+          backgroundColor: AppColors.background,
+          appBar: AppBar(
+            title: const Text('Wallet'),
+            actions: [
+              IconButton(
+                icon: const Icon(Icons.refresh),
+                onPressed: isLoading ? null : () => walletProvider.refresh(),
+                tooltip: 'Refresh',
+              ),
             ],
           ),
-        ),
-      ),
+          body: SafeArea(
+            child: RefreshIndicator(
+              onRefresh: () => walletProvider.refresh(),
+              child: SingleChildScrollView(
+                physics: const AlwaysScrollableScrollPhysics(),
+                padding: const EdgeInsets.all(24.0),
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.stretch,
+                  children: [
+                    if (error != null)
+                      Container(
+                        padding: const EdgeInsets.all(16.0),
+                        margin: const EdgeInsets.only(bottom: 16.0),
+                        decoration: BoxDecoration(
+                          color: AppColors.error.withOpacity(0.1),
+                          borderRadius: BorderRadius.circular(12.0),
+                          border: Border.all(color: AppColors.error),
+                        ),
+                        child: Row(
+                          children: [
+                            Icon(Icons.error_outline, color: AppColors.error),
+                            const SizedBox(width: 12.0),
+                            Expanded(
+                              child: Text(
+                                error,
+                                style: textTheme.bodyMedium?.copyWith(
+                                  color: AppColors.error,
+                                ),
+                              ),
+                            ),
+                            TextButton(
+                              onPressed: () => walletProvider.refresh(),
+                              child: const Text('Retry'),
+                            ),
+                          ],
+                        ),
+                      ),
+                    // Balance Card
+                    _buildBalanceCard(balance, textTheme),
+                    const SizedBox(height: 24.0),
+
+                    // Action Buttons
+                    _buildActionButtons(context, textTheme),
+                    const SizedBox(height: 32.0),
+
+                    // Recent Transactions
+                    _buildTransactionsSection(transactions, isLoading, textTheme),
+                  ],
+                ),
+              ),
+            ),
+          ),
+        );
+      },
+    );
+      },
     );
   }
 
-  Widget _buildBalanceCard(TextTheme textTheme) {
+  Widget _buildBalanceCard(double balance, TextTheme textTheme) {
     return Container(
       padding: const EdgeInsets.all(24.0),
       decoration: BoxDecoration(
@@ -121,7 +164,7 @@ class WalletScreen extends StatelessWidget {
           ),
           const SizedBox(height: 8.0),
           Text(
-            '\$${availableBalance.toStringAsFixed(2)}',
+            '₹${balance.toStringAsFixed(2)}',
             style: textTheme.headlineLarge?.copyWith(
               fontWeight: FontWeight.bold,
               color: AppColors.background,
@@ -149,7 +192,7 @@ class WalletScreen extends StatelessWidget {
                     ),
                     const SizedBox(height: 4.0),
                     Text(
-                      '\$${dailyTransferLimit.toStringAsFixed(0)}',
+                      '₹${dailyTransferLimit.toStringAsFixed(0)}',
                       style: textTheme.titleMedium?.copyWith(
                         fontWeight: FontWeight.w600,
                         color: AppColors.background,
@@ -175,7 +218,7 @@ class WalletScreen extends StatelessWidget {
                     ),
                     const SizedBox(height: 4.0),
                     Text(
-                      '\$${monthlyTransferLimit.toStringAsFixed(0)}',
+                      '₹${monthlyTransferLimit.toStringAsFixed(0)}',
                       style: textTheme.titleMedium?.copyWith(
                         fontWeight: FontWeight.w600,
                         color: AppColors.background,
@@ -254,7 +297,11 @@ class WalletScreen extends StatelessWidget {
     );
   }
 
-  Widget _buildTransactionsSection(TextTheme textTheme) {
+  Widget _buildTransactionsSection(
+    List<WalletTransactionModel> transactions,
+    bool isLoading,
+    TextTheme textTheme,
+  ) {
     return Column(
       crossAxisAlignment: CrossAxisAlignment.start,
       children: [
@@ -266,7 +313,14 @@ class WalletScreen extends StatelessWidget {
           ),
         ),
         const SizedBox(height: 16.0),
-        if (transactions.isEmpty)
+        if (isLoading && transactions.isEmpty)
+          const Center(
+            child: Padding(
+              padding: EdgeInsets.all(32.0),
+              child: CircularProgressIndicator(),
+            ),
+          )
+        else if (transactions.isEmpty)
           Center(
             child: Padding(
               padding: const EdgeInsets.all(32.0),
@@ -298,14 +352,13 @@ class WalletScreen extends StatelessWidget {
   }
 
   Widget _buildTransactionCard(
-    Map<String, dynamic> transaction,
+    WalletTransactionModel transaction,
     TextTheme textTheme,
   ) {
-    final isCredit = transaction['type'] == 'credit';
-    final amount = transaction['amount'] as double;
-    final description = transaction['description'] as String;
-    final date = transaction['date'] as String;
-    final time = transaction['time'] as String;
+    final isCredit = transaction.isCredit;
+    final amount = transaction.amount;
+    final description = transaction.description ?? 'Transaction';
+    final date = transaction.createdAt;
 
     return Container(
       margin: const EdgeInsets.only(bottom: 12.0),
@@ -350,7 +403,7 @@ class WalletScreen extends StatelessWidget {
                 ),
                 const SizedBox(height: 4.0),
                 Text(
-                  '$date at $time',
+                  '${date.day}/${date.month}/${date.year} at ${date.hour}:${date.minute.toString().padLeft(2, '0')}',
                   style: textTheme.bodySmall?.copyWith(
                     color: AppColors.textSecondary,
                   ),
@@ -363,7 +416,7 @@ class WalletScreen extends StatelessWidget {
             crossAxisAlignment: CrossAxisAlignment.end,
             children: [
               Text(
-                '${isCredit ? '+' : '-'}\$${amount.toStringAsFixed(2)}',
+                '${isCredit ? '+' : '-'}₹${amount.toStringAsFixed(2)}',
                 style: textTheme.titleMedium?.copyWith(
                   fontWeight: FontWeight.bold,
                   color: isCredit ? AppColors.success : AppColors.error,
@@ -376,13 +429,18 @@ class WalletScreen extends StatelessWidget {
                   vertical: 2.0,
                 ),
                 decoration: BoxDecoration(
-                  color: AppColors.success.withOpacity(0.1),
+                  color: (transaction.status == 'completed'
+                          ? AppColors.success
+                          : AppColors.warning)
+                      .withOpacity(0.1),
                   borderRadius: BorderRadius.circular(4.0),
                 ),
                 child: Text(
-                  'Completed',
+                  transaction.status.toUpperCase(),
                   style: textTheme.labelSmall?.copyWith(
-                    color: AppColors.success,
+                    color: transaction.status == 'completed'
+                        ? AppColors.success
+                        : AppColors.warning,
                     fontSize: 10.0,
                   ),
                 ),

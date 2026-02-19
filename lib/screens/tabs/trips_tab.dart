@@ -1,5 +1,14 @@
 import 'package:flutter/material.dart';
+import 'package:provider/provider.dart';
 import '../../core/theme/app_colors.dart';
+import '../../core/constants/app_constants.dart';
+import '../../core/utils/helpers.dart';
+import '../../data/models/trip_model.dart';
+import '../../providers/trip_provider.dart';
+import '../../providers/auth_provider.dart';
+import '../../services/socket_service.dart';
+import '../../services/permission_service.dart';
+import 'package:flutter/foundation.dart';
 
 class TripsTab extends StatefulWidget {
   const TripsTab({super.key});
@@ -8,238 +17,108 @@ class TripsTab extends StatefulWidget {
   State<TripsTab> createState() => _TripsTabState();
 }
 
-class _TripsTabState extends State<TripsTab> with SingleTickerProviderStateMixin {
+class _TripsTabState extends State<TripsTab> 
+    with SingleTickerProviderStateMixin, WidgetsBindingObserver {
   late TabController _tabController;
   final TextEditingController _searchController = TextEditingController();
+  final SocketService _socketService = SocketService();
+  bool _hasInitialized = false;
   
-  // Placeholder trip data
-  final Map<String, List<Map<String, dynamic>>> _tripsData = {
-    'Running': [
-      {
-        'id': '1',
-        'containerId': 'CONT-2024-001',
-        'reference': 'REF-001',
-        'driverName': 'John Doe',
-        'vehicleNumber': 'ABC-1234',
-        'origin': 'Warehouse A',
-        'destination': 'Distribution Center B',
-        'status': 'Running',
-        'eta': '2h 30m',
-        'isPinned': false,
-      },
-      {
-        'id': '2',
-        'containerId': 'CONT-2024-002',
-        'reference': 'REF-002',
-        'driverName': 'Jane Smith',
-        'vehicleNumber': 'XYZ-5678',
-        'origin': 'Port Terminal',
-        'destination': 'Warehouse C',
-        'status': 'Running',
-        'eta': '1h 15m',
-        'isPinned': true,
-      },
-      {
-        'id': '3',
-        'containerId': 'CONT-2024-003',
-        'reference': null,
-        'driverName': 'Mike Johnson',
-        'vehicleNumber': 'DEF-9012',
-        'origin': 'Factory X',
-        'destination': 'Port Terminal',
-        'status': 'Running',
-        'eta': '3h 45m',
-        'isPinned': false,
-      },
-    ],
-    'Completed': [
-      {
-        'id': '4',
-        'containerId': 'CONT-2024-004',
-        'reference': 'REF-003',
-        'driverName': 'Sarah Williams',
-        'vehicleNumber': 'GHI-3456',
-        'origin': 'Warehouse B',
-        'destination': 'Customer Site',
-        'status': 'Completed',
-        'eta': null,
-        'isPinned': false,
-      },
-      {
-        'id': '5',
-        'containerId': 'CONT-2024-005',
-        'reference': 'REF-004',
-        'driverName': 'Tom Brown',
-        'vehicleNumber': 'JKL-7890',
-        'origin': 'Distribution Center',
-        'destination': 'Retail Store',
-        'status': 'Completed',
-        'eta': null,
-        'isPinned': true,
-      },
-    ],
-    'POD Pending': [
-      {
-        'id': '6',
-        'containerId': 'CONT-2024-006',
-        'reference': 'REF-005',
-        'driverName': 'Emily Davis',
-        'vehicleNumber': 'MNO-2345',
-        'origin': 'Warehouse A',
-        'destination': 'Customer Location',
-        'status': 'POD Pending',
-        'eta': null,
-        'isPinned': false,
-      },
-      {
-        'id': '7',
-        'containerId': 'CONT-2024-007',
-        'reference': 'REF-006',
-        'driverName': 'David Wilson',
-        'vehicleNumber': 'PQR-6789',
-        'origin': 'Port Terminal',
-        'destination': 'Distribution Hub',
-        'status': 'POD Pending',
-        'eta': null,
-        'isPinned': true,
-      },
-    ],
-  };
-
-  // Store pinned state and order per segment
-  final Map<String, Set<String>> _pinnedTrips = {
-    'Running': {'2'},
-    'Completed': {'5'},
-    'POD Pending': {'7'},
-  };
-  
-  final Map<String, List<String>> _tripOrder = {
-    'Running': ['2', '1', '3'],
-    'Completed': ['5', '4'],
-    'POD Pending': ['7', '6'],
-  };
-
   @override
   void initState() {
     super.initState();
+    WidgetsBinding.instance.addObserver(this);
     _tabController = TabController(length: 3, vsync: this);
-    _searchController.addListener(() => setState(() {}));
+    _tabController.addListener(_onTabChanged);
+    _searchController.addListener(() {
+      setState(() {});
+    });
+    
+    // Load trips when screen initializes
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      _initializeTripsTab();
+    });
   }
 
   @override
   void dispose() {
+    WidgetsBinding.instance.removeObserver(this);
+    _tabController.removeListener(_onTabChanged);
     _tabController.dispose();
     _searchController.dispose();
     super.dispose();
   }
 
-  String get _currentSegment {
-    switch (_tabController.index) {
-      case 0:
-        return 'Running';
-      case 1:
-        return 'Completed';
-      case 2:
-        return 'POD Pending';
-      default:
-        return 'Running';
+  @override
+  void didChangeAppLifecycleState(AppLifecycleState state) {
+    if (state == AppLifecycleState.resumed) {
+      // Refresh when app resumes
+      _refreshTrips();
     }
   }
 
-  List<Map<String, dynamic>> get _filteredTrips {
-    final segment = _currentSegment;
-    final allTrips = _tripsData[segment] ?? [];
+  void _onTabChanged() {
+    if (_tabController.indexIsChanging) {
+      setState(() {});
+    }
+    // Note: We don't refresh on status tab switch (Active/Completed/POD Pending)
+    // because the data is already filtered correctly by status.
+    // Real-time Socket.IO updates handle status changes automatically.
+  }
+
+  Future<void> _initializeTripsTab() async {
+    if (_hasInitialized) return;
+    _hasInitialized = true;
+
+    // Ensure Socket.IO is connected
+    await _ensureSocketConnection();
+
+    // Load trips
+    final tripProvider = Provider.of<TripProvider>(context, listen: false);
+    await tripProvider.loadTrips(refresh: true);
+  }
+
+  Future<void> _ensureSocketConnection() async {
+    try {
+      // Check if Socket.IO is connected
+      if (!_socketService.isConnected) {
+        if (kDebugMode) {
+          print('TripsTab: Socket.IO not connected, connecting...');
+        }
+        await _socketService.connect();
+      }
+
+      // Ensure transporter room is joined
+      final authProvider = Provider.of<AuthProvider>(context, listen: false);
+      if (authProvider.user != null) {
+        _socketService.joinTransporterRoom(authProvider.user!.id);
+        if (kDebugMode) {
+          print('TripsTab: Joined transporter room: ${authProvider.user!.id}');
+        }
+      }
+    } catch (e) {
+      if (kDebugMode) {
+        print('TripsTab: Error ensuring Socket.IO connection: $e');
+      }
+      // Don't fail if Socket.IO connection fails
+    }
+  }
+
+
+  Future<void> _refreshTrips() async {
+    final tripProvider = Provider.of<TripProvider>(context, listen: false);
+    await tripProvider.loadTrips(refresh: true);
+  }
+
+  List<TripModel> _getFilteredTrips(List<TripModel> trips) {
     final searchQuery = _searchController.text.toLowerCase();
+    if (searchQuery.isEmpty) return trips;
     
-    // Filter by search query
-    List<Map<String, dynamic>> filtered = allTrips.where((trip) {
-      if (searchQuery.isEmpty) return true;
-      final containerId = (trip['containerId'] as String).toLowerCase();
-      final reference = (trip['reference'] as String? ?? '').toLowerCase();
+    return trips.where((trip) {
+      final containerId = (trip.containerNumber ?? '').toLowerCase();
+      final reference = (trip.reference ?? '').toLowerCase();
       return containerId.contains(searchQuery) || reference.contains(searchQuery);
     }).toList();
-
-    // Sort: pinned first, then by order
-    final pinned = _pinnedTrips[segment] ?? {};
-    final order = _tripOrder[segment] ?? [];
-    
-    filtered.sort((a, b) {
-      final aPinned = pinned.contains(a['id']);
-      final bPinned = pinned.contains(b['id']);
-      
-      if (aPinned && !bPinned) return -1;
-      if (!aPinned && bPinned) return 1;
-      if (aPinned && bPinned) {
-        final aIndex = order.indexOf(a['id'] as String);
-        final bIndex = order.indexOf(b['id'] as String);
-        if (aIndex != -1 && bIndex != -1) return aIndex.compareTo(bIndex);
-        if (aIndex != -1) return -1;
-        if (bIndex != -1) return 1;
-      }
-      
-      final aIndex = order.indexOf(a['id'] as String);
-      final bIndex = order.indexOf(b['id'] as String);
-      if (aIndex != -1 && bIndex != -1) return aIndex.compareTo(bIndex);
-      if (aIndex != -1) return -1;
-      if (bIndex != -1) return 1;
-      return 0;
-    });
-
-    return filtered;
-  }
-
-  void _togglePin(String tripId) {
-    setState(() {
-      final segment = _currentSegment;
-      final pinned = _pinnedTrips[segment] ?? {};
-      if (pinned.contains(tripId)) {
-        pinned.remove(tripId);
-      } else {
-        pinned.add(tripId);
-      }
-      _pinnedTrips[segment] = pinned;
-    });
-  }
-
-  void _onReorder(int oldIndex, int newIndex) {
-    setState(() {
-      final segment = _currentSegment;
-      final trips = _filteredTrips;
-      final pinned = _pinnedTrips[segment] ?? {};
-      
-      // Separate pinned and unpinned
-      final pinnedTrips = trips.where((t) => pinned.contains(t['id'])).toList();
-      final unpinnedTrips = trips.where((t) => !pinned.contains(t['id'])).toList();
-      
-      // Determine which list the item is in
-      if (oldIndex < pinnedTrips.length) {
-        // Moving within pinned items
-        if (newIndex < pinnedTrips.length) {
-          final item = pinnedTrips.removeAt(oldIndex);
-          pinnedTrips.insert(newIndex, item);
-        } else {
-          // Cannot move pinned item below unpinned
-          return;
-        }
-      } else {
-        // Moving within unpinned items
-        final unpinnedIndex = oldIndex - pinnedTrips.length;
-        final newUnpinnedIndex = newIndex - pinnedTrips.length;
-        if (newUnpinnedIndex >= 0 && newUnpinnedIndex < unpinnedTrips.length) {
-          final item = unpinnedTrips.removeAt(unpinnedIndex);
-          unpinnedTrips.insert(newUnpinnedIndex, item);
-        } else {
-          return;
-        }
-      }
-      
-      // Update order
-      final newOrder = [
-        ...pinnedTrips.map((t) => t['id'] as String),
-        ...unpinnedTrips.map((t) => t['id'] as String),
-      ];
-      _tripOrder[segment] = newOrder;
-    });
   }
 
   @override
@@ -251,12 +130,32 @@ class _TripsTabState extends State<TripsTab> with SingleTickerProviderStateMixin
       appBar: AppBar(
         title: const Text('Trips'),
         actions: [
-          IconButton(
-            icon: const Icon(Icons.add_circle_outline),
-            onPressed: () {
-              Navigator.of(context).pushNamed('/create-trip');
+          Consumer<AuthProvider>(
+            builder: (context, authProvider, child) {
+              final permissionService = PermissionService(authProvider);
+              // Only show "Add Trip" button if user has createTrips permission or is transporter
+              // Note: hasPermission already returns true for transporters, so the OR is redundant but safe
+              final canCreateTrip = permissionService.hasPermission('createTrips') || permissionService.isTransporter;
+              
+              if (kDebugMode) {
+                print('TripsTab: canCreateTrip check - result: $canCreateTrip');
+                print('TripsTab: User: ${authProvider.user?.id}, userType: ${authProvider.user?.userType}');
+              }
+              
+              if (canCreateTrip) {
+                return IconButton(
+                  icon: const Icon(Icons.add_circle_outline),
+                  onPressed: () async {
+                    // Navigate to create trip screen and wait for return
+                    await Navigator.of(context).pushNamed('/create-trip');
+                    // Refresh trips when returning from create trip screen
+                    _refreshTrips();
+                  },
+                  tooltip: 'Add Trip',
+                );
+              }
+              return const SizedBox.shrink();
             },
-            tooltip: 'Add Trip',
           ),
         ],
         bottom: TabBar(
@@ -265,7 +164,7 @@ class _TripsTabState extends State<TripsTab> with SingleTickerProviderStateMixin
           labelColor: AppColors.primary,
           unselectedLabelColor: AppColors.textSecondary,
           tabs: const [
-            Tab(text: 'Running'),
+            Tab(text: 'Active'),
             Tab(text: 'Completed'),
             Tab(text: 'POD Pending'),
           ],
@@ -297,13 +196,45 @@ class _TripsTabState extends State<TripsTab> with SingleTickerProviderStateMixin
 
             // Trips List
             Expanded(
-              child: TabBarView(
-                controller: _tabController,
-                children: [
-                  _buildTripsList('Running', textTheme),
-                  _buildTripsList('Completed', textTheme),
-                  _buildTripsList('POD Pending', textTheme),
-                ],
+              child: Consumer<TripProvider>(
+                builder: (context, tripProvider, child) {
+                  if (tripProvider.isLoading && tripProvider.trips.isEmpty) {
+                    return const Center(child: CircularProgressIndicator());
+                  }
+
+                  if (tripProvider.error != null && tripProvider.trips.isEmpty) {
+                    return Center(
+                      child: Column(
+                        mainAxisAlignment: MainAxisAlignment.center,
+                        children: [
+                          Text(
+                            tripProvider.error!,
+                            style: textTheme.bodyMedium?.copyWith(
+                              color: AppColors.error,
+                            ),
+                          ),
+                          const SizedBox(height: 16.0),
+                          ElevatedButton(
+                            onPressed: () {
+                              tripProvider.clearError();
+                              tripProvider.loadTrips(refresh: true);
+                            },
+                            child: const Text('Retry'),
+                          ),
+                        ],
+                      ),
+                    );
+                  }
+
+                  return TabBarView(
+                    controller: _tabController,
+                    children: [
+                      _buildTripsList(AppConstants.tripStatusActive, textTheme),
+                      _buildTripsList(AppConstants.tripStatusCompleted, textTheme),
+                      _buildTripsList(AppConstants.tripStatusPodPending, textTheme),
+                    ],
+                  );
+                },
               ),
             ),
           ],
@@ -312,174 +243,205 @@ class _TripsTabState extends State<TripsTab> with SingleTickerProviderStateMixin
     );
   }
 
-  Widget _buildTripsList(String segment, TextTheme textTheme) {
-    final trips = _filteredTrips;
+  Widget _buildTripsList(String status, TextTheme textTheme) {
+    return Consumer<TripProvider>(
+      builder: (context, tripProvider, child) {
+        List<TripModel> trips;
+        switch (status) {
+          case AppConstants.tripStatusActive:
+            // Show both ACTIVE and PLANNED trips in Active tab
+            // (planned trips are queued for activation)
+            trips = [
+              ...tripProvider.activeTrips,
+              ...tripProvider.plannedTrips,
+            ];
+            break;
+          case AppConstants.tripStatusCompleted:
+            trips = tripProvider.completedTrips;
+            break;
+          case AppConstants.tripStatusPodPending:
+            trips = tripProvider.podPendingTrips;
+            break;
+          default:
+            trips = [];
+        }
 
-    if (trips.isEmpty) {
-      return Center(
-        child: Column(
-          mainAxisAlignment: MainAxisAlignment.center,
-          children: [
-            Icon(
-              Icons.local_shipping_outlined,
-              size: 64.0,
-              color: AppColors.textMuted,
-            ),
-            const SizedBox(height: 24.0),
-            Text(
-              'No trips found',
-              style: textTheme.bodyMedium?.copyWith(
-                color: AppColors.textSecondary,
-              ),
-            ),
-          ],
-        ),
-      );
-    }
+        final filteredTrips = _getFilteredTrips(trips);
 
-    return ReorderableListView.builder(
-      padding: const EdgeInsets.symmetric(horizontal: 24.0),
-      itemCount: trips.length,
-      onReorder: _onReorder,
-      itemBuilder: (context, index) {
-        final trip = trips[index];
-        return _buildTripCard(trip, textTheme, index);
+        if (filteredTrips.isEmpty) {
+          return Center(
+            child: Column(
+              mainAxisAlignment: MainAxisAlignment.center,
+              children: [
+                Icon(
+                  Icons.local_shipping_outlined,
+                  size: 64.0,
+                  color: AppColors.textMuted,
+                ),
+                const SizedBox(height: 24.0),
+                Text(
+                  'No trips found',
+                  style: textTheme.bodyMedium?.copyWith(
+                    color: AppColors.textSecondary,
+                  ),
+                ),
+              ],
+            ),
+          );
+        }
+
+        return RefreshIndicator(
+          onRefresh: () async {
+            await tripProvider.loadTrips(refresh: true);
+          },
+          child: ListView.builder(
+            padding: const EdgeInsets.symmetric(horizontal: 24.0),
+            itemCount: filteredTrips.length,
+            itemBuilder: (context, index) {
+              final trip = filteredTrips[index];
+              return _buildTripCard(trip, textTheme, index);
+            },
+          ),
+        );
       },
     );
   }
 
   Widget _buildTripCard(
-    Map<String, dynamic> trip,
+    TripModel trip,
     TextTheme textTheme,
     int index,
   ) {
-    final segment = _currentSegment;
-    final isPinned = _pinnedTrips[segment]?.contains(trip['id']) ?? false;
 
     return Container(
-      key: Key('trip_${trip['id']}'),
+      key: Key('trip_${trip.id}'),
       margin: const EdgeInsets.only(bottom: 16.0),
       padding: const EdgeInsets.all(20.0),
       decoration: BoxDecoration(
         color: AppColors.background,
         borderRadius: BorderRadius.circular(16.0),
         border: Border.all(
-          color: isPinned ? AppColors.primary : AppColors.dividerGrey,
-          width: isPinned ? 2.0 : 1.0,
+          color: AppColors.dividerGrey,
+          width: 1.0,
         ),
       ),
-      child: Column(
-        crossAxisAlignment: CrossAxisAlignment.start,
-        children: [
-          // Container ID and Pin Button
-          Row(
-            mainAxisAlignment: MainAxisAlignment.spaceBetween,
-            children: [
-              Expanded(
-                child: Text(
-                  trip['containerId'] as String,
-                  style: textTheme.titleLarge?.copyWith(
-                    fontWeight: FontWeight.bold,
-                    color: AppColors.primary,
+      child: InkWell(
+        onTap: () {
+          Navigator.of(context).pushNamed('/trip-detail', arguments: trip.id);
+        },
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            // Container ID and Trip ID
+            Row(
+              mainAxisAlignment: MainAxisAlignment.spaceBetween,
+              children: [
+                Expanded(
+                  child: Column(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      if (trip.containerNumber != null)
+                        Text(
+                          trip.containerNumber!,
+                          style: textTheme.titleLarge?.copyWith(
+                            fontWeight: FontWeight.bold,
+                            color: AppColors.primary,
+                          ),
+                        ),
+                      if (trip.tripId.isNotEmpty) ...[
+                        const SizedBox(height: 4.0),
+                        Text(
+                          trip.tripId,
+                          style: textTheme.bodySmall?.copyWith(
+                            color: AppColors.textSecondary,
+                          ),
+                        ),
+                      ],
+                    ],
                   ),
                 ),
-              ),
-              IconButton(
-                icon: Icon(
-                  isPinned ? Icons.push_pin : Icons.push_pin_outlined,
-                  color: isPinned ? AppColors.primary : AppColors.textSecondary,
-                ),
-                onPressed: () => _togglePin(trip['id'] as String),
-                tooltip: isPinned ? 'Unpin' : 'Pin',
-              ),
-            ],
-          ),
-
-          // Trip Reference (if available)
-          if (trip['reference'] != null) ...[
-            const SizedBox(height: 4.0),
-            Text(
-              trip['reference'] as String,
-              style: textTheme.bodySmall?.copyWith(
-                color: AppColors.textSecondary,
-              ),
+              ],
             ),
-          ],
 
-          const SizedBox(height: 16.0),
-
-          // Status Badge
-          Container(
-            padding: const EdgeInsets.symmetric(
-              horizontal: 12.0,
-              vertical: 6.0,
-            ),
-            decoration: BoxDecoration(
-              color: _getStatusColor(trip['status'] as String).withOpacity(0.1),
-              borderRadius: BorderRadius.circular(12.0),
-            ),
-            child: Text(
-              trip['status'] as String,
-              style: textTheme.labelSmall?.copyWith(
-                color: _getStatusColor(trip['status'] as String),
-                fontWeight: FontWeight.w600,
-              ),
-            ),
-          ),
-
-          const SizedBox(height: 16.0),
-
-          // Driver Name
-          _buildTripInfoRow(
-            icon: Icons.person_outline,
-            label: 'Driver',
-            value: trip['driverName'] as String,
-            textTheme: textTheme,
-          ),
-
-          const SizedBox(height: 12.0),
-
-          // Vehicle Number
-          _buildTripInfoRow(
-            icon: Icons.directions_car_outlined,
-            label: 'Vehicle',
-            value: trip['vehicleNumber'] as String,
-            textTheme: textTheme,
-          ),
-
-          const SizedBox(height: 12.0),
-
-          // Origin → Destination
-          Row(
-            children: [
-              Expanded(
-                child: _buildTripInfoRow(
-                  icon: Icons.location_on_outlined,
-                  label: 'Origin',
-                  value: trip['origin'] as String,
-                  textTheme: textTheme,
-                ),
-              ),
-              const SizedBox(width: 16.0),
-              Icon(
-                Icons.arrow_forward,
-                color: AppColors.textSecondary,
-                size: 20.0,
-              ),
-              const SizedBox(width: 16.0),
-              Expanded(
-                child: _buildTripInfoRow(
-                  icon: Icons.location_on,
-                  label: 'Destination',
-                  value: trip['destination'] as String,
-                  textTheme: textTheme,
+            // Trip Reference (if available)
+            if (trip.reference != null) ...[
+              const SizedBox(height: 4.0),
+              Text(
+                trip.reference!,
+                style: textTheme.bodySmall?.copyWith(
+                  color: AppColors.textSecondary,
                 ),
               ),
             ],
-          ),
 
-          // ETA (if available)
-          if (trip['eta'] != null) ...[
+            const SizedBox(height: 16.0),
+
+            // Status Badge
+            Container(
+              padding: const EdgeInsets.symmetric(
+                horizontal: 12.0,
+                vertical: 6.0,
+              ),
+              decoration: BoxDecoration(
+                color: _getStatusColor(trip.status).withOpacity(0.1),
+                borderRadius: BorderRadius.circular(12.0),
+              ),
+              child: Text(
+                Helpers.getStatusLabel(trip.status),
+                style: textTheme.labelSmall?.copyWith(
+                  color: _getStatusColor(trip.status),
+                  fontWeight: FontWeight.w600,
+                ),
+              ),
+            ),
+
+            const SizedBox(height: 16.0),
+
+            // Trip Type
+            _buildTripInfoRow(
+              icon: Icons.local_shipping_outlined,
+              label: 'Type',
+              value: Helpers.getTripTypeLabel(trip.tripType),
+              textTheme: textTheme,
+            ),
+
+            const SizedBox(height: 12.0),
+
+            // Origin → Destination
+            if (trip.pickupLocation != null || trip.dropLocation != null)
+              Row(
+                children: [
+                  if (trip.pickupLocation != null)
+                    Expanded(
+                      child: _buildTripInfoRow(
+                        icon: Icons.location_on_outlined,
+                        label: 'Origin',
+                        value: trip.pickupLocation!.address ?? 'Location',
+                        textTheme: textTheme,
+                      ),
+                    ),
+                  if (trip.pickupLocation != null && trip.dropLocation != null) ...[
+                    const SizedBox(width: 16.0),
+                    Icon(
+                      Icons.arrow_forward,
+                      color: AppColors.textSecondary,
+                      size: 20.0,
+                    ),
+                    const SizedBox(width: 16.0),
+                  ],
+                  if (trip.dropLocation != null)
+                    Expanded(
+                      child: _buildTripInfoRow(
+                        icon: Icons.location_on,
+                        label: 'Destination',
+                        value: trip.dropLocation!.address ?? 'Location',
+                        textTheme: textTheme,
+                      ),
+                    ),
+                ],
+              ),
+
+            // Created Date
             const SizedBox(height: 16.0),
             Container(
               padding: const EdgeInsets.all(12.0),
@@ -490,23 +452,23 @@ class _TripsTabState extends State<TripsTab> with SingleTickerProviderStateMixin
               child: Row(
                 children: [
                   Icon(
-                    Icons.access_time,
+                    Icons.calendar_today_outlined,
                     color: AppColors.primary,
                     size: 20.0,
                   ),
                   const SizedBox(width: 8.0),
                   Text(
-                    'ETA: ${trip['eta'] as String}',
+                    'Created: ${Helpers.formatDateTime(trip.createdAt)}',
                     style: textTheme.bodyMedium?.copyWith(
                       color: AppColors.textPrimary,
-                      fontWeight: FontWeight.w600,
+                      fontWeight: FontWeight.w500,
                     ),
                   ),
                 ],
               ),
             ),
           ],
-        ],
+        ),
       ),
     );
   }
@@ -547,13 +509,17 @@ class _TripsTabState extends State<TripsTab> with SingleTickerProviderStateMixin
   }
 
   Color _getStatusColor(String status) {
-    switch (status) {
-      case 'Running':
+    switch (status.toUpperCase()) {
+      case AppConstants.tripStatusActive:
         return AppColors.info;
-      case 'Completed':
+      case AppConstants.tripStatusCompleted:
         return AppColors.success;
-      case 'POD Pending':
+      case AppConstants.tripStatusPodPending:
         return AppColors.warning;
+      case AppConstants.tripStatusPlanned:
+        return AppColors.textSecondary;
+      case AppConstants.tripStatusCancelled:
+        return AppColors.error;
       default:
         return AppColors.textSecondary;
     }

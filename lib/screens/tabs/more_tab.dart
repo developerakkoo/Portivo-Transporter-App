@@ -1,5 +1,8 @@
 import 'package:flutter/material.dart';
+import 'package:provider/provider.dart';
 import '../../core/theme/app_colors.dart';
+import '../../providers/auth_provider.dart';
+import '../../services/permission_service.dart';
 
 class MoreTab extends StatelessWidget {
   const MoreTab({super.key});
@@ -14,52 +17,74 @@ class MoreTab extends StatelessWidget {
         title: const Text('More'),
       ),
       body: SafeArea(
-        child: ListView(
-          padding: const EdgeInsets.all(24.0),
-          children: [
-            _buildMenuItem(
-              context: context,
-              icon: Icons.directions_car_outlined,
-              title: 'Vehicles',
-              onTap: () {
-                // TODO: Navigate to vehicles
-              },
-            ),
-            _buildMenuItem(
-              context: context,
-              icon: Icons.account_balance_wallet_outlined,
-              title: 'Wallet',
-              onTap: () {
-                Navigator.of(context).pushNamed('/wallet');
-              },
-            ),
-            _buildMenuItem(
-              context: context,
-              icon: Icons.credit_card_outlined,
-              title: 'Fuel cards',
-              onTap: () {
-                Navigator.of(context).pushNamed('/fuel-cards');
-              },
-            ),
-            _buildMenuItem(
-              context: context,
-              icon: Icons.business_outlined,
-              title: 'Company & users',
-              onTap: () {
-                Navigator.of(context).pushNamed('/company-users');
-              },
-            ),
-            _buildMenuItem(
-              context: context,
-              icon: Icons.help_outline,
-              title: 'Support',
-              onTap: () {
-                // TODO: Navigate to support
-              },
-            ),
-            const SizedBox(height: 32.0),
-            _buildLogoutButton(context, textTheme),
-          ],
+        child: Consumer<AuthProvider>(
+          builder: (context, authProvider, child) {
+            final permissionService = PermissionService(authProvider);
+            
+            return ListView(
+              padding: const EdgeInsets.all(24.0),
+              children: [
+                _buildMenuItem(
+                  context: context,
+                  icon: Icons.person_outline,
+                  title: 'View Profile',
+                  onTap: () {
+                    Navigator.of(context).pushNamed('/profile');
+                  },
+                ),
+                // Vehicles - requires manageVehicles permission
+                if (permissionService.hasPermission('manageVehicles') || permissionService.isTransporter)
+                  _buildMenuItem(
+                    context: context,
+                    icon: Icons.directions_car_outlined,
+                    title: 'Vehicles',
+                    onTap: () {
+                      Navigator.of(context).pushNamed('/vehicles');
+                    },
+                  ),
+                // Wallet - requires manageWallet permission
+                if (permissionService.hasPermission('manageWallet') || permissionService.isTransporter)
+                  _buildMenuItem(
+                    context: context,
+                    icon: Icons.account_balance_wallet_outlined,
+                    title: 'Wallet',
+                    onTap: () {
+                      Navigator.of(context).pushNamed('/wallet');
+                    },
+                  ),
+                // Fuel Cards - requires manageFuelCards permission
+                if (permissionService.hasPermission('manageFuelCards') || permissionService.isTransporter)
+                  _buildMenuItem(
+                    context: context,
+                    icon: Icons.credit_card_outlined,
+                    title: 'Fuel cards',
+                    onTap: () {
+                      Navigator.of(context).pushNamed('/fuel-cards');
+                    },
+                  ),
+                // Company Users - requires manageUsers permission
+                if (permissionService.hasPermission('manageUsers') || permissionService.isTransporter)
+                  _buildMenuItem(
+                    context: context,
+                    icon: Icons.business_outlined,
+                    title: 'Company & users',
+                    onTap: () {
+                      Navigator.of(context).pushNamed('/company-users');
+                    },
+                  ),
+                _buildMenuItem(
+                  context: context,
+                  icon: Icons.help_outline,
+                  title: 'Support',
+                  onTap: () {
+                    Navigator.of(context).pushNamed('/support');
+                  },
+                ),
+                const SizedBox(height: 32.0),
+                _buildLogoutButton(context, textTheme),
+              ],
+            );
+          },
         ),
       ),
     );
@@ -104,27 +129,44 @@ class MoreTab extends StatelessWidget {
   }
 
   Widget _buildLogoutButton(BuildContext context, TextTheme textTheme) {
-    return SizedBox(
-      height: 52.0,
-      child: OutlinedButton(
-        onPressed: () {
-          // TODO: Implement logout
-          Navigator.of(context).pushReplacementNamed('/login');
-        },
+    return Consumer<AuthProvider>(
+      builder: (context, authProvider, child) {
+        return SizedBox(
+          height: 52.0,
+          child: OutlinedButton(
+            onPressed: authProvider.isLoading
+                ? null
+                : () async {
+                    await authProvider.logout();
+                    if (context.mounted) {
+                      Navigator.of(context).pushReplacementNamed('/login');
+                    }
+                  },
         style: OutlinedButton.styleFrom(
           side: const BorderSide(color: AppColors.error),
           shape: RoundedRectangleBorder(
             borderRadius: BorderRadius.circular(12.0),
           ),
         ),
-        child: Text(
-          'Logout',
-          style: textTheme.labelLarge?.copyWith(
-            color: AppColors.error,
-            fontWeight: FontWeight.w600,
+            child: authProvider.isLoading
+                ? const SizedBox(
+                    height: 20.0,
+                    width: 20.0,
+                    child: CircularProgressIndicator(
+                      strokeWidth: 2.0,
+                      valueColor: AlwaysStoppedAnimation<Color>(AppColors.error),
+                    ),
+                  )
+                : Text(
+                    'Logout',
+                    style: textTheme.labelLarge?.copyWith(
+                      color: AppColors.error,
+                      fontWeight: FontWeight.w600,
+                    ),
+                  ),
           ),
-        ),
-      ),
+        );
+      },
     );
   }
 }

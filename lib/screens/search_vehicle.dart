@@ -1,5 +1,8 @@
 import 'package:flutter/material.dart';
+import 'package:provider/provider.dart';
 import '../core/theme/app_colors.dart';
+import '../data/models/vehicle_model.dart';
+import '../providers/vehicle_provider.dart';
 
 class SearchVehicleScreen extends StatefulWidget {
   const SearchVehicleScreen({super.key});
@@ -10,25 +13,14 @@ class SearchVehicleScreen extends StatefulWidget {
 
 class _SearchVehicleScreenState extends State<SearchVehicleScreen> {
   final TextEditingController _searchController = TextEditingController();
-  List<Map<String, String>> _filteredVehicles = [];
-
-  // Placeholder vehicle data
-  final List<Map<String, String>> _allVehicles = [
-    {'number': 'ABC-1234', 'type': 'Truck', 'model': 'Mercedes Actros'},
-    {'number': 'XYZ-5678', 'type': 'Van', 'model': 'Ford Transit'},
-    {'number': 'DEF-9012', 'type': 'Truck', 'model': 'Volvo FH16'},
-    {'number': 'GHI-3456', 'type': 'Van', 'model': 'Mercedes Sprinter'},
-    {'number': 'JKL-7890', 'type': 'Truck', 'model': 'Scania R450'},
-    {'number': 'MNO-2345', 'type': 'Van', 'model': 'Iveco Daily'},
-    {'number': 'PQR-6789', 'type': 'Truck', 'model': 'MAN TGX'},
-    {'number': 'STU-0123', 'type': 'Van', 'model': 'Renault Master'},
-  ];
 
   @override
   void initState() {
     super.initState();
-    _filteredVehicles = _allVehicles;
-    _searchController.addListener(_filterVehicles);
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      context.read<VehicleProvider>().loadVehicles();
+    });
+    _searchController.addListener(() => setState(() {}));
   }
 
   @override
@@ -37,23 +29,7 @@ class _SearchVehicleScreenState extends State<SearchVehicleScreen> {
     super.dispose();
   }
 
-  void _filterVehicles() {
-    final query = _searchController.text.toLowerCase();
-    setState(() {
-      if (query.isEmpty) {
-        _filteredVehicles = _allVehicles;
-      } else {
-        _filteredVehicles = _allVehicles
-            .where((vehicle) =>
-                vehicle['number']!.toLowerCase().contains(query) ||
-                vehicle['type']!.toLowerCase().contains(query) ||
-                vehicle['model']!.toLowerCase().contains(query))
-            .toList();
-      }
-    });
-  }
-
-  void _selectVehicle(Map<String, String> vehicle) {
+  void _selectVehicle(VehicleModel vehicle) {
     Navigator.of(context).pop(vehicle);
   }
 
@@ -92,23 +68,41 @@ class _SearchVehicleScreenState extends State<SearchVehicleScreen> {
 
             // Vehicle List
             Expanded(
-              child: _filteredVehicles.isEmpty
-                  ? Center(
+              child: Consumer<VehicleProvider>(
+                builder: (context, vehicleProvider, child) {
+                  final vehicles = vehicleProvider.vehicles;
+                  final query = _searchController.text.toLowerCase();
+                  final filteredVehicles = query.isEmpty
+                      ? vehicles
+                      : vehicles.where((v) =>
+                          v.vehicleNumber.toLowerCase().contains(query) ||
+                          (v.trailerType?.toLowerCase().contains(query) ?? false)).toList();
+
+                  if (vehicleProvider.isLoading && vehicles.isEmpty) {
+                    return const Center(child: CircularProgressIndicator());
+                  }
+
+                  if (filteredVehicles.isEmpty) {
+                    return Center(
                       child: Text(
-                        'No vehicles found',
+                        vehicles.isEmpty ? 'No vehicles yet' : 'No vehicles match your search',
                         style: textTheme.bodyMedium?.copyWith(
                           color: AppColors.textSecondary,
                         ),
                       ),
-                    )
-                  : ListView.builder(
-                      padding: const EdgeInsets.symmetric(horizontal: 24.0),
-                      itemCount: _filteredVehicles.length,
-                      itemBuilder: (context, index) {
-                        final vehicle = _filteredVehicles[index];
-                        return _buildVehicleItem(vehicle, textTheme);
-                      },
-                    ),
+                    );
+                  }
+
+                  return ListView.builder(
+                    padding: const EdgeInsets.symmetric(horizontal: 24.0),
+                    itemCount: filteredVehicles.length,
+                    itemBuilder: (context, index) {
+                      final vehicle = filteredVehicles[index];
+                      return _buildVehicleItem(vehicle, textTheme);
+                    },
+                  );
+                },
+              ),
             ),
           ],
         ),
@@ -116,7 +110,7 @@ class _SearchVehicleScreenState extends State<SearchVehicleScreen> {
     );
   }
 
-  Widget _buildVehicleItem(Map<String, String> vehicle, TextTheme textTheme) {
+  Widget _buildVehicleItem(VehicleModel vehicle, TextTheme textTheme) {
     return InkWell(
       onTap: () => _selectVehicle(vehicle),
       borderRadius: BorderRadius.circular(12.0),
@@ -151,7 +145,7 @@ class _SearchVehicleScreenState extends State<SearchVehicleScreen> {
                 crossAxisAlignment: CrossAxisAlignment.start,
                 children: [
                   Text(
-                    vehicle['number']!,
+                    vehicle.vehicleNumber,
                     style: textTheme.titleMedium?.copyWith(
                       fontWeight: FontWeight.bold,
                       color: AppColors.textPrimary,
@@ -159,7 +153,7 @@ class _SearchVehicleScreenState extends State<SearchVehicleScreen> {
                   ),
                   const SizedBox(height: 4.0),
                   Text(
-                    '${vehicle['type']} • ${vehicle['model']}',
+                    '${vehicle.ownerType}${vehicle.trailerType != null ? ' • ${vehicle.trailerType}' : ''}',
                     style: textTheme.bodySmall?.copyWith(
                       color: AppColors.textSecondary,
                     ),

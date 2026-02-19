@@ -1,6 +1,14 @@
 import 'package:flutter/material.dart';
+import 'package:flutter/foundation.dart';
 import 'package:carousel_slider/carousel_slider.dart';
+import 'package:provider/provider.dart';
 import '../../core/theme/app_colors.dart';
+import '../../core/utils/helpers.dart';
+import '../../data/models/trip_model.dart';
+import '../../providers/trip_provider.dart';
+import '../../providers/wallet_provider.dart';
+import '../../providers/auth_provider.dart';
+import '../../services/permission_service.dart';
 
 class HomeTab extends StatefulWidget {
   const HomeTab({super.key});
@@ -12,22 +20,33 @@ class HomeTab extends StatefulWidget {
 class _HomeTabState extends State<HomeTab> {
   int _currentBannerIndex = 0;
 
-  // Placeholder data - replace with real data later
-  final int runningTrips = 5;
-  final int activeTrips = 3;
-  final int completedTrips = 12;
-  final double walletBalance = 12500.00;
-
-  // Placeholder active trip data
-  final Map<String, dynamic>? activeTrip = {
-    'id': 'TRP-2024-001',
-    'driverName': 'John Doe',
-    'vehicleInfo': 'ABC-1234 (Truck)',
-    'origin': 'Warehouse A',
-    'destination': 'Distribution Center B',
-    'status': 'In Transit',
-    'eta': '2h 30m',
-  };
+  @override
+  void initState() {
+    super.initState();
+    // Load trips and wallet when screen initializes
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      if (mounted) {
+        try {
+          final tripProvider = Provider.of<TripProvider>(context, listen: false);
+          final walletProvider = Provider.of<WalletProvider>(context, listen: false);
+          tripProvider.loadTrips(refresh: true).catchError((e) {
+            if (kDebugMode) {
+              print('HomeTab: Error loading trips: $e');
+            }
+          });
+          walletProvider.loadBalance().catchError((e) {
+            if (kDebugMode) {
+              print('HomeTab: Error loading wallet: $e');
+            }
+          });
+        } catch (e) {
+          if (kDebugMode) {
+            print('HomeTab: Error accessing providers: $e');
+          }
+        }
+      }
+    });
+  }
 
   @override
   Widget build(BuildContext context) {
@@ -41,52 +60,115 @@ class _HomeTabState extends State<HomeTab> {
           IconButton(
             icon: const Icon(Icons.notifications_outlined),
             onPressed: () {
-              // TODO: Navigate to notifications
+              Navigator.of(context).pushNamed('/notifications');
             },
           ),
           IconButton(
             icon: const Icon(Icons.account_circle_outlined),
             onPressed: () {
-              // TODO: Navigate to profile
+              Navigator.of(context).pushNamed('/profile');
             },
           ),
         ],
       ),
       body: SafeArea(
-        child: SingleChildScrollView(
-          padding: const EdgeInsets.only(bottom: 24.0),
-          child: Column(
-            crossAxisAlignment: CrossAxisAlignment.stretch,
-            children: [
-              // Banner Carousel Section
-              _buildBannerCarousel(textTheme),
-
-              const SizedBox(height: 24.0),
-
-              // Overview Cards Section (2x2 Grid)
-              Padding(
-                padding: const EdgeInsets.symmetric(horizontal: 24.0),
-                child: _buildOverviewCards(textTheme),
-              ),
-
-              const SizedBox(height: 24.0),
-
-              // Active Trip Card Section
-              if (activeTrip != null) ...[
-                Padding(
-                  padding: const EdgeInsets.symmetric(horizontal: 24.0),
-                  child: _buildActiveTripCard(textTheme),
+        child: Consumer<TripProvider>(
+          builder: (context, tripProvider, child) {
+            // Show loading state
+            if (tripProvider.isLoading && tripProvider.trips.isEmpty) {
+              return const Center(
+                child: CircularProgressIndicator(),
+              );
+            }
+            
+            // Show error state
+            if (tripProvider.error != null && tripProvider.trips.isEmpty) {
+              return Center(
+                child: Padding(
+                  padding: const EdgeInsets.all(24.0),
+                  child: Column(
+                    mainAxisAlignment: MainAxisAlignment.center,
+                    children: [
+                      Icon(
+                        Icons.error_outline,
+                        size: 64.0,
+                        color: AppColors.error,
+                      ),
+                      const SizedBox(height: 16.0),
+                      Text(
+                        'Error loading data',
+                        style: textTheme.titleLarge?.copyWith(
+                          color: AppColors.textPrimary,
+                        ),
+                      ),
+                      const SizedBox(height: 8.0),
+                      Text(
+                        tripProvider.error!,
+                        style: textTheme.bodyMedium?.copyWith(
+                          color: AppColors.textSecondary,
+                        ),
+                        textAlign: TextAlign.center,
+                      ),
+                      const SizedBox(height: 24.0),
+                      ElevatedButton(
+                        onPressed: () {
+                          tripProvider.loadTrips(refresh: true);
+                        },
+                        child: const Text('Retry'),
+                      ),
+                    ],
+                  ),
                 ),
-                const SizedBox(height: 24.0),
-              ],
+              );
+            }
+            
+            // Normal UI
+            return SingleChildScrollView(
+              padding: const EdgeInsets.only(bottom: 24.0),
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.stretch,
+                children: [
+                  // Banner Carousel Section
+                  // _buildBannerCarousel(textTheme),
 
-              // Action Buttons Section
-              Padding(
-                padding: const EdgeInsets.symmetric(horizontal: 24.0),
-                child: _buildActionButtons(context, textTheme),
+                  // const SizedBox(height: 24.0),
+
+                  // Overview Cards Section (2x2 Grid)
+                  Padding(
+                    padding: const EdgeInsets.symmetric(horizontal: 24.0),
+                    child: _buildOverviewCards(textTheme, tripProvider),
+                  ),
+
+              const SizedBox(height: 24.0),
+
+                  // Active Trip Card Section
+                  Builder(
+                    builder: (context) {
+                      final activeTrips = tripProvider.activeTrips;
+                      if (activeTrips.isNotEmpty) {
+                        return Column(
+                          children: [
+                            Padding(
+                              padding: const EdgeInsets.symmetric(horizontal: 24.0),
+                              child: _buildActiveTripCard(textTheme, activeTrips.first),
+                            ),
+                            const SizedBox(height: 24.0),
+                          ],
+                        );
+                      }
+                      return const SizedBox.shrink();
+                    },
+                  ),
+
+                  // Action Buttons Section
+                  Padding(
+                    padding: const EdgeInsets.symmetric(horizontal: 24.0),
+                    child: _buildActionButtons(context, textTheme),
+                  ),
+                ],
               ),
-            ],
-          ),
+            );
+          },
         ),
       ),
     );
@@ -102,6 +184,7 @@ class _HomeTabState extends State<HomeTab> {
         ),
         title: 'Welcome to Prottivo',
         subtitle: 'Efficient Logistics Management',
+        textTheme: textTheme,
       ),
       _buildBannerPlaceholder(
         gradient: LinearGradient(
@@ -114,6 +197,7 @@ class _HomeTabState extends State<HomeTab> {
         ),
         title: 'Track Your Trips',
         subtitle: 'Real-time Updates & Monitoring',
+        textTheme: textTheme,
       ),
       _buildBannerPlaceholder(
         gradient: LinearGradient(
@@ -123,6 +207,7 @@ class _HomeTabState extends State<HomeTab> {
         ),
         title: 'Manage Operations',
         subtitle: 'Streamlined Workflow',
+        textTheme: textTheme,
       ),
     ];
 
@@ -172,6 +257,7 @@ class _HomeTabState extends State<HomeTab> {
     required Gradient gradient,
     required String title,
     required String subtitle,
+    required TextTheme textTheme,
   }) {
     return Container(
       width: double.infinity,
@@ -190,7 +276,7 @@ class _HomeTabState extends State<HomeTab> {
           children: [
             Text(
               title,
-              style: Theme.of(context).textTheme.headlineSmall?.copyWith(
+              style: textTheme.headlineSmall?.copyWith(
                 color: AppColors.background,
                 fontWeight: FontWeight.bold,
               ),
@@ -198,7 +284,7 @@ class _HomeTabState extends State<HomeTab> {
             const SizedBox(height: 8.0),
             Text(
               subtitle,
-              style: Theme.of(context).textTheme.bodyMedium?.copyWith(
+              style: textTheme.bodyMedium?.copyWith(
                 color: AppColors.background.withOpacity(0.9),
               ),
             ),
@@ -208,7 +294,11 @@ class _HomeTabState extends State<HomeTab> {
     );
   }
 
-  Widget _buildOverviewCards(TextTheme textTheme) {
+  Widget _buildOverviewCards(TextTheme textTheme, TripProvider tripProvider) {
+    final activeTripsCount = tripProvider.activeTrips.length;
+    final completedTripsCount = tripProvider.completedTrips.length;
+    final plannedTripsCount = tripProvider.plannedTrips.length;
+    
     return Column(
       crossAxisAlignment: CrossAxisAlignment.start,
       children: [
@@ -224,18 +314,18 @@ class _HomeTabState extends State<HomeTab> {
           children: [
             Expanded(
               child: _buildOverviewCard(
-                icon: Icons.directions_run,
-                value: runningTrips.toString(),
-                label: 'Running Trips',
+                icon: Icons.local_shipping,
+                value: activeTripsCount.toString(),
+                label: 'Active Trips',
                 textTheme: textTheme,
               ),
             ),
             const SizedBox(width: 16.0),
             Expanded(
               child: _buildOverviewCard(
-                icon: Icons.local_shipping,
-                value: activeTrips.toString(),
-                label: 'Active Trips',
+                icon: Icons.schedule,
+                value: plannedTripsCount.toString(),
+                label: 'Planned Trips',
                 textTheme: textTheme,
               ),
             ),
@@ -247,7 +337,7 @@ class _HomeTabState extends State<HomeTab> {
             Expanded(
               child: _buildOverviewCard(
                 icon: Icons.check_circle_outline,
-                value: completedTrips.toString(),
+                value: completedTripsCount.toString(),
                 label: 'Completed Trips',
                 textTheme: textTheme,
               ),
@@ -255,9 +345,9 @@ class _HomeTabState extends State<HomeTab> {
             const SizedBox(width: 16.0),
             Expanded(
               child: _buildOverviewCard(
-                icon: Icons.account_balance_wallet,
-                value: '\$${walletBalance.toStringAsFixed(0)}',
-                label: 'Wallet Balance',
+                icon: Icons.pending_actions,
+                value: tripProvider.podPendingTrips.length.toString(),
+                label: 'POD Pending',
                 textTheme: textTheme,
               ),
             ),
@@ -304,9 +394,7 @@ class _HomeTabState extends State<HomeTab> {
     );
   }
 
-  Widget _buildActiveTripCard(TextTheme textTheme) {
-    if (activeTrip == null) return const SizedBox.shrink();
-
+  Widget _buildActiveTripCard(TextTheme textTheme, TripModel trip) {
     return Column(
       crossAxisAlignment: CrossAxisAlignment.start,
       children: [
@@ -331,11 +419,28 @@ class _HomeTabState extends State<HomeTab> {
               Row(
                 mainAxisAlignment: MainAxisAlignment.spaceBetween,
                 children: [
-                  Text(
-                    activeTrip!['id'] as String,
-                    style: textTheme.titleMedium?.copyWith(
-                      fontWeight: FontWeight.bold,
-                      color: AppColors.primary,
+                  Expanded(
+                    child: Column(
+                      crossAxisAlignment: CrossAxisAlignment.start,
+                      children: [
+                        if (trip.containerNumber != null)
+                          Text(
+                            trip.containerNumber!,
+                            style: textTheme.titleMedium?.copyWith(
+                              fontWeight: FontWeight.bold,
+                              color: AppColors.primary,
+                            ),
+                          ),
+                        if (trip.tripId.isNotEmpty) ...[
+                          const SizedBox(height: 4.0),
+                          Text(
+                            trip.tripId,
+                            style: textTheme.bodySmall?.copyWith(
+                              color: AppColors.textSecondary,
+                            ),
+                          ),
+                        ],
+                      ],
                     ),
                   ),
                   Container(
@@ -348,7 +453,7 @@ class _HomeTabState extends State<HomeTab> {
                       borderRadius: BorderRadius.circular(12.0),
                     ),
                     child: Text(
-                      activeTrip!['status'] as String,
+                      Helpers.getStatusLabel(trip.status),
                       style: textTheme.labelSmall?.copyWith(
                         color: AppColors.primary,
                         fontWeight: FontWeight.w600,
@@ -358,47 +463,38 @@ class _HomeTabState extends State<HomeTab> {
                 ],
               ),
               const SizedBox(height: 16.0),
-              _buildTripInfoRow(
-                icon: Icons.person_outline,
-                label: 'Driver',
-                value: activeTrip!['driverName'] as String,
-                textTheme: textTheme,
-              ),
-              const SizedBox(height: 12.0),
-              _buildTripInfoRow(
-                icon: Icons.local_shipping_outlined,
-                label: 'Vehicle',
-                value: activeTrip!['vehicleInfo'] as String,
-                textTheme: textTheme,
-              ),
-              const SizedBox(height: 12.0),
-              Row(
-                children: [
-                  Expanded(
-                    child: _buildTripInfoRow(
-                      icon: Icons.location_on_outlined,
-                      label: 'Origin',
-                      value: activeTrip!['origin'] as String,
-                      textTheme: textTheme,
-                    ),
-                  ),
-                  const SizedBox(width: 16.0),
-                  Icon(
-                    Icons.arrow_forward,
-                    color: AppColors.textSecondary,
-                    size: 20.0,
-                  ),
-                  const SizedBox(width: 16.0),
-                  Expanded(
-                    child: _buildTripInfoRow(
-                      icon: Icons.location_on,
-                      label: 'Destination',
-                      value: activeTrip!['destination'] as String,
-                      textTheme: textTheme,
-                    ),
-                  ),
-                ],
-              ),
+              if (trip.pickupLocation != null || trip.dropLocation != null)
+                Row(
+                  children: [
+                    if (trip.pickupLocation != null)
+                      Expanded(
+                        child: _buildTripInfoRow(
+                          icon: Icons.location_on_outlined,
+                          label: 'Origin',
+                          value: trip.pickupLocation!.address ?? 'Location',
+                          textTheme: textTheme,
+                        ),
+                      ),
+                    if (trip.pickupLocation != null && trip.dropLocation != null) ...[
+                      const SizedBox(width: 16.0),
+                      Icon(
+                        Icons.arrow_forward,
+                        color: AppColors.textSecondary,
+                        size: 20.0,
+                      ),
+                      const SizedBox(width: 16.0),
+                    ],
+                    if (trip.dropLocation != null)
+                      Expanded(
+                        child: _buildTripInfoRow(
+                          icon: Icons.location_on,
+                          label: 'Destination',
+                          value: trip.dropLocation!.address ?? 'Location',
+                          textTheme: textTheme,
+                        ),
+                      ),
+                  ],
+                ),
               const SizedBox(height: 16.0),
               Container(
                 padding: const EdgeInsets.all(12.0),
@@ -409,16 +505,16 @@ class _HomeTabState extends State<HomeTab> {
                 child: Row(
                   children: [
                     Icon(
-                      Icons.access_time,
+                      Icons.calendar_today_outlined,
                       color: AppColors.primary,
                       size: 20.0,
                     ),
                     const SizedBox(width: 8.0),
                     Text(
-                      'ETA: ${activeTrip!['eta'] as String}',
+                      'Created: ${Helpers.formatDateTime(trip.createdAt)}',
                       style: textTheme.bodyMedium?.copyWith(
                         color: AppColors.textPrimary,
-                        fontWeight: FontWeight.w600,
+                        fontWeight: FontWeight.w500,
                       ),
                     ),
                   ],
@@ -467,15 +563,28 @@ class _HomeTabState extends State<HomeTab> {
   }
 
   Widget _buildActionButtons(BuildContext context, TextTheme textTheme) {
-    return Column(
-      crossAxisAlignment: CrossAxisAlignment.stretch,
-      children: [
-        SizedBox(
-          height: 52.0,
-          child: ElevatedButton(
-            onPressed: () {
-              Navigator.of(context).pushNamed('/create-trip');
-            },
+    return Consumer<AuthProvider>(
+      builder: (context, authProvider, child) {
+        final permissionService = PermissionService(authProvider);
+        // Only show "Create Trip" button if user has createTrips permission or is transporter
+        // Note: hasPermission already returns true for transporters, so the OR is redundant but safe
+        final canCreateTrip = permissionService.hasPermission('createTrips') || permissionService.isTransporter;
+        
+        if (kDebugMode) {
+          print('HomeTab: canCreateTrip check - result: $canCreateTrip');
+          print('HomeTab: User: ${authProvider.user?.id}, userType: ${authProvider.user?.userType}');
+        }
+        
+        return Column(
+          crossAxisAlignment: CrossAxisAlignment.stretch,
+          children: [
+            if (canCreateTrip)
+              SizedBox(
+                height: 52.0,
+                child: ElevatedButton(
+                  onPressed: () {
+                    Navigator.of(context).pushNamed('/create-trip');
+                  },
             style: ElevatedButton.styleFrom(
               backgroundColor: AppColors.primary,
               foregroundColor: AppColors.background,
@@ -499,16 +608,16 @@ class _HomeTabState extends State<HomeTab> {
               ],
             ),
           ),
-        ),
-        const SizedBox(height: 12.0),
-        Row(
-          children: [
-            Expanded(
+                ),
+            const SizedBox(height: 12.0),
+            Row(
+              children: [
+                Expanded(
               child: SizedBox(
                 height: 52.0,
                 child: OutlinedButton(
                   onPressed: () {
-                    // TODO: Navigate to add driver
+                    Navigator.of(context).pushNamed('/add-driver');
                   },
                   style: OutlinedButton.styleFrom(
                     foregroundColor: AppColors.primary,
@@ -543,7 +652,7 @@ class _HomeTabState extends State<HomeTab> {
                 height: 52.0,
                 child: OutlinedButton(
                   onPressed: () {
-                    // TODO: Navigate to add vehicle
+                    Navigator.of(context).pushNamed('/add-vehicle');
                   },
                   style: OutlinedButton.styleFrom(
                     foregroundColor: AppColors.primary,
@@ -572,9 +681,11 @@ class _HomeTabState extends State<HomeTab> {
                 ),
               ),
             ),
+              ],
+            ),
           ],
-        ),
-      ],
+        );
+      },
     );
   }
 }

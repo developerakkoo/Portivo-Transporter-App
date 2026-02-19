@@ -1,6 +1,10 @@
 import 'package:flutter/material.dart';
+import 'package:provider/provider.dart';
 import '../../core/theme/app_colors.dart';
-import '../../models/app_user.dart';
+import '../../data/models/company_user_model.dart';
+import '../../providers/company_user_provider.dart';
+import '../../providers/auth_provider.dart';
+import '../../services/permission_service.dart';
 
 class CompanyUsersScreen extends StatefulWidget {
   const CompanyUsersScreen({super.key});
@@ -10,54 +14,16 @@ class CompanyUsersScreen extends StatefulWidget {
 }
 
 class _CompanyUsersScreenState extends State<CompanyUsersScreen> {
-  List<AppUser> _users = [];
-
-  void _addUser(AppUser user) {
-    setState(() {
-      _users.add(user);
+  @override
+  void initState() {
+    super.initState();
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      context.read<CompanyUserProvider>().loadUsers();
     });
   }
 
-  void _updateUser(AppUser updatedUser) {
-    setState(() {
-      final index = _users.indexWhere((u) => u.id == updatedUser.id);
-      if (index != -1) {
-        _users[index] = updatedUser;
-      }
-    });
-  }
-
-  void _deleteUser(String userId) {
-    setState(() {
-      _users.removeWhere((u) => u.id == userId);
-    });
-  }
-
-  void _toggleUserAccess(AppUser user) {
-    setState(() {
-      final index = _users.indexWhere((u) => u.id == user.id);
-      if (index != -1) {
-        _users[index] = user.copyWith(
-          hasAccess: !user.hasAccess,
-          updatedAt: DateTime.now(),
-        );
-      }
-    });
-  }
-
-  void _showSetPinDialog(AppUser user) {
-    Navigator.of(context).pushNamed(
-      '/add-user',
-      arguments: {'user': user, 'mode': 'set-pin'},
-    ).then((result) {
-      if (result != null && result is AppUser) {
-        _updateUser(result);
-      }
-    });
-  }
-
-  void _showDeleteConfirmation(AppUser user) {
-    showDialog(
+  Future<void> _handleDelete(CompanyUserModel user) async {
+    final confirmed = await showDialog<bool>(
       context: context,
       builder: (context) => AlertDialog(
         title: const Text('Delete User'),
@@ -66,7 +32,7 @@ class _CompanyUsersScreenState extends State<CompanyUsersScreen> {
         ),
         actions: [
           TextButton(
-            onPressed: () => Navigator.of(context).pop(),
+            onPressed: () => Navigator.of(context).pop(false),
             child: Text(
               'Cancel',
               style: Theme.of(context).textTheme.bodyLarge?.copyWith(
@@ -75,10 +41,7 @@ class _CompanyUsersScreenState extends State<CompanyUsersScreen> {
             ),
           ),
           TextButton(
-            onPressed: () {
-              Navigator.of(context).pop();
-              _deleteUser(user.id);
-            },
+            onPressed: () => Navigator.of(context).pop(true),
             child: Text(
               'Delete',
               style: Theme.of(context).textTheme.bodyLarge?.copyWith(
@@ -90,33 +53,201 @@ class _CompanyUsersScreenState extends State<CompanyUsersScreen> {
         ],
       ),
     );
+
+    if (confirmed == true && mounted) {
+      final provider = context.read<CompanyUserProvider>();
+      final success = await provider.deleteUser(user.id);
+      if (mounted) {
+        if (success) {
+          ScaffoldMessenger.of(context).showSnackBar(
+            const SnackBar(
+              content: Text('User deleted successfully'),
+              backgroundColor: Colors.green,
+            ),
+          );
+        } else {
+          ScaffoldMessenger.of(context).showSnackBar(
+            SnackBar(
+              content: Text(provider.error ?? 'Failed to delete user'),
+              backgroundColor: Colors.red,
+            ),
+          );
+        }
+      }
+    }
+  }
+
+  Future<void> _handleToggleAccess(CompanyUserModel user) async {
+    final provider = context.read<CompanyUserProvider>();
+    final newAccess = !user.hasAccess;
+    
+    if (!newAccess) {
+      final confirmed = await showDialog<bool>(
+        context: context,
+        builder: (context) => AlertDialog(
+          title: const Text('Disable Access'),
+          content: Text(
+            'Are you sure you want to disable access for ${user.name}?',
+          ),
+          actions: [
+            TextButton(
+              onPressed: () => Navigator.of(context).pop(false),
+              child: const Text('Cancel'),
+            ),
+            TextButton(
+              onPressed: () => Navigator.of(context).pop(true),
+              child: const Text('Disable'),
+            ),
+          ],
+        ),
+      );
+
+      if (confirmed != true) return;
+    }
+
+    final success = await provider.toggleAccess(user.id, newAccess);
+    if (mounted) {
+      if (success) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(
+            content: Text('Access ${newAccess ? 'enabled' : 'disabled'} successfully'),
+            backgroundColor: Colors.green,
+          ),
+        );
+      } else {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(
+            content: Text(provider.error ?? 'Failed to toggle access'),
+            backgroundColor: Colors.red,
+          ),
+        );
+      }
+    }
   }
 
   @override
   Widget build(BuildContext context) {
     final textTheme = Theme.of(context).textTheme;
 
-    return Scaffold(
-      backgroundColor: AppColors.background,
-      appBar: AppBar(
-        title: const Text('Company & Users'),
-      ),
-      body: _users.isEmpty
-          ? _buildEmptyState(textTheme)
-          : _buildUsersList(textTheme),
-      floatingActionButton: FloatingActionButton(
-        onPressed: () {
-          Navigator.of(context)
-              .pushNamed('/add-user', arguments: {'mode': 'add'})
-              .then((result) {
-            if (result != null && result is AppUser) {
-              _addUser(result);
-            }
+    return Consumer<AuthProvider>(
+      builder: (context, authProvider, authChild) {
+        final permissionService = PermissionService(authProvider);
+        
+        // Check permission - redirect if unauthorized
+        if (!permissionService.hasPermission('manageUsers') && !permissionService.isTransporter) {
+          WidgetsBinding.instance.addPostFrameCallback((_) {
+            Navigator.of(context).pop();
+            ScaffoldMessenger.of(context).showSnackBar(
+              const SnackBar(
+                content: Text('You do not have permission to access company users'),
+                backgroundColor: Colors.red,
+              ),
+            );
           });
-        },
-        backgroundColor: AppColors.primary,
-        child: const Icon(Icons.add, color: AppColors.background),
-      ),
+          return Scaffold(
+            backgroundColor: AppColors.background,
+            appBar: AppBar(title: const Text('Company & Users')),
+            body: const Center(child: CircularProgressIndicator()),
+          );
+        }
+
+        return Consumer<CompanyUserProvider>(
+          builder: (context, provider, child) {
+        final users = provider.users;
+        final isLoading = provider.isLoading;
+        final error = provider.error;
+
+        if (isLoading && users.isEmpty) {
+          return Scaffold(
+            backgroundColor: AppColors.background,
+            appBar: AppBar(
+              title: const Text('Company & Users'),
+            ),
+            body: const Center(child: CircularProgressIndicator()),
+          );
+        }
+
+        if (error != null && users.isEmpty) {
+          return Scaffold(
+            backgroundColor: AppColors.background,
+            appBar: AppBar(
+              title: const Text('Company & Users'),
+            ),
+            body: Center(
+              child: Column(
+                mainAxisAlignment: MainAxisAlignment.center,
+                children: [
+                  Icon(
+                    Icons.error_outline,
+                    size: 64.0,
+                    color: AppColors.error,
+                  ),
+                  const SizedBox(height: 16.0),
+                  Text(
+                    'Error loading users',
+                    style: textTheme.titleLarge,
+                  ),
+                  const SizedBox(height: 8.0),
+                  Text(
+                    error,
+                    style: textTheme.bodyMedium?.copyWith(
+                      color: AppColors.textSecondary,
+                    ),
+                    textAlign: TextAlign.center,
+                  ),
+                  const SizedBox(height: 24.0),
+                  ElevatedButton(
+                    onPressed: () => provider.loadUsers(refresh: true),
+                    child: const Text('Retry'),
+                  ),
+                ],
+              ),
+            ),
+          );
+        }
+
+        return Scaffold(
+          backgroundColor: AppColors.background,
+          appBar: AppBar(
+            title: const Text('Company & Users'),
+            actions: [
+              IconButton(
+                icon: const Icon(Icons.refresh),
+                onPressed: isLoading
+                    ? null
+                    : () => provider.loadUsers(refresh: true),
+                tooltip: 'Refresh',
+              ),
+            ],
+          ),
+          body: RefreshIndicator(
+            onRefresh: () => provider.loadUsers(refresh: true),
+            child: users.isEmpty
+                ? _buildEmptyState(textTheme)
+                : _buildUsersList(users, textTheme),
+          ),
+          floatingActionButton: Consumer<AuthProvider>(
+            builder: (context, authProvider, child) {
+              final permissionService = PermissionService(authProvider);
+              // Only show "Add User" button if user has manageUsers permission or is transporter
+              if (permissionService.hasPermission('manageUsers') || permissionService.isTransporter) {
+                return FloatingActionButton(
+                  onPressed: () {
+                    Navigator.of(context)
+                        .pushNamed('/add-user', arguments: {'mode': 'add'})
+                        .then((_) => provider.loadUsers(refresh: true));
+                  },
+                  backgroundColor: AppColors.primary,
+                  child: const Icon(Icons.add, color: AppColors.background),
+                );
+              }
+              return const SizedBox.shrink();
+            },
+          ),
+        );
+      },
+    );
+      },
     );
   }
 
@@ -154,18 +285,18 @@ class _CompanyUsersScreenState extends State<CompanyUsersScreen> {
     );
   }
 
-  Widget _buildUsersList(TextTheme textTheme) {
+  Widget _buildUsersList(List<CompanyUserModel> users, TextTheme textTheme) {
     return ListView.builder(
       padding: const EdgeInsets.all(16.0),
-      itemCount: _users.length,
+      itemCount: users.length,
       itemBuilder: (context, index) {
-        final user = _users[index];
+        final user = users[index];
         return _buildUserCard(user, textTheme);
       },
     );
   }
 
-  Widget _buildUserCard(AppUser user, TextTheme textTheme) {
+  Widget _buildUserCard(CompanyUserModel user, TextTheme textTheme) {
     return Card(
       margin: const EdgeInsets.only(bottom: 12.0),
       elevation: 0,
@@ -180,11 +311,7 @@ class _CompanyUsersScreenState extends State<CompanyUsersScreen> {
         onTap: () {
           Navigator.of(context)
               .pushNamed('/add-user', arguments: {'user': user, 'mode': 'edit'})
-              .then((result) {
-            if (result != null && result is AppUser) {
-              _updateUser(result);
-            }
-          });
+              .then((_) => context.read<CompanyUserProvider>().loadUsers(refresh: true));
         },
         borderRadius: BorderRadius.circular(12.0),
         child: Padding(
@@ -219,7 +346,7 @@ class _CompanyUsersScreenState extends State<CompanyUsersScreen> {
                         ),
                         const SizedBox(height: 4.0),
                         Text(
-                          user.phone,
+                          user.mobile,
                           style: textTheme.bodyMedium?.copyWith(
                             color: AppColors.textSecondary,
                           ),
@@ -235,17 +362,13 @@ class _CompanyUsersScreenState extends State<CompanyUsersScreen> {
                           Navigator.of(context)
                               .pushNamed('/add-user',
                                   arguments: {'user': user, 'mode': 'edit'})
-                              .then((result) {
-                            if (result != null && result is AppUser) {
-                              _updateUser(result);
-                            }
-                          });
+                              .then((_) => context.read<CompanyUserProvider>().loadUsers(refresh: true));
                           break;
                         case 'toggle':
-                          _toggleUserAccess(user);
+                          _handleToggleAccess(user);
                           break;
                         case 'delete':
-                          _showDeleteConfirmation(user);
+                          _handleDelete(user);
                           break;
                       }
                     },
@@ -288,75 +411,32 @@ class _CompanyUsersScreenState extends State<CompanyUsersScreen> {
               const SizedBox(height: 12.0),
               Row(
                 children: [
-                  if (!user.hasPinSet())
-                    Expanded(
-                      child: OutlinedButton.icon(
-                        onPressed: () => _showSetPinDialog(user),
-                        icon: const Icon(Icons.lock_outline, size: 18.0),
-                        label: const Text('Set PIN'),
-                        style: OutlinedButton.styleFrom(
-                          side: const BorderSide(color: AppColors.primary),
-                          shape: RoundedRectangleBorder(
-                            borderRadius: BorderRadius.circular(8.0),
-                          ),
-                        ),
+                  Expanded(
+                    child: OutlinedButton.icon(
+                      onPressed: () {
+                        Navigator.of(context)
+                            .pushNamed('/add-user',
+                                arguments: {'user': user, 'mode': 'set-pin'})
+                            .then((_) => context.read<CompanyUserProvider>().loadUsers(refresh: true));
+                      },
+                      icon: Icon(
+                        user.hasPinSet() ? Icons.lock : Icons.lock_outline,
+                        size: 18.0,
                       ),
-                    )
-                  else
-                    Expanded(
-                      child: OutlinedButton.icon(
-                        onPressed: () => _showSetPinDialog(user),
-                        icon: const Icon(Icons.lock, size: 18.0),
-                        label: const Text('Change PIN'),
-                        style: OutlinedButton.styleFrom(
-                          side: const BorderSide(color: AppColors.primary),
-                          shape: RoundedRectangleBorder(
-                            borderRadius: BorderRadius.circular(8.0),
-                          ),
+                      label: Text(user.hasPinSet() ? 'Change PIN' : 'Set PIN'),
+                      style: OutlinedButton.styleFrom(
+                        side: const BorderSide(color: AppColors.primary),
+                        shape: RoundedRectangleBorder(
+                          borderRadius: BorderRadius.circular(8.0),
                         ),
                       ),
                     ),
+                  ),
                   const SizedBox(width: 8.0),
                   Switch(
                     value: user.hasAccess,
                     onChanged: (value) {
-                      if (!value) {
-                        showDialog(
-                          context: context,
-                          builder: (context) => AlertDialog(
-                            title: const Text('Disable Access'),
-                            content: Text(
-                              'Are you sure you want to disable access for ${user.name}?',
-                            ),
-                            actions: [
-                              TextButton(
-                                onPressed: () => Navigator.of(context).pop(),
-                                child: Text(
-                                  'Cancel',
-                                  style: textTheme.bodyLarge?.copyWith(
-                                        color: AppColors.textSecondary,
-                                      ),
-                                ),
-                              ),
-                              TextButton(
-                                onPressed: () {
-                                  Navigator.of(context).pop();
-                                  _toggleUserAccess(user);
-                                },
-                                child: Text(
-                                  'Disable',
-                                  style: textTheme.bodyLarge?.copyWith(
-                                        color: AppColors.error,
-                                        fontWeight: FontWeight.w600,
-                                      ),
-                                ),
-                              ),
-                            ],
-                          ),
-                        );
-                      } else {
-                        _toggleUserAccess(user);
-                      }
+                      _handleToggleAccess(user);
                     },
                     activeColor: AppColors.primary,
                   ),
@@ -390,4 +470,3 @@ class _CompanyUsersScreenState extends State<CompanyUsersScreen> {
     );
   }
 }
-

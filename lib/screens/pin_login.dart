@@ -1,6 +1,8 @@
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
+import 'package:provider/provider.dart';
 import '../core/theme/app_colors.dart';
+import '../providers/auth_provider.dart';
 
 class PinLoginScreen extends StatefulWidget {
   const PinLoginScreen({super.key});
@@ -21,6 +23,8 @@ class _PinLoginScreenState extends State<PinLoginScreen> {
 
   bool _isLoading = false;
   String? _errorMessage;
+  final TextEditingController _mobileController = TextEditingController();
+  bool _isCompanyUser = false; // Toggle between transporter and company user login
 
   @override
   void initState() {
@@ -39,6 +43,7 @@ class _PinLoginScreenState extends State<PinLoginScreen> {
     for (var node in _pinFocusNodes) {
       node.dispose();
     }
+    _mobileController.dispose();
     super.dispose();
   }
 
@@ -68,10 +73,17 @@ class _PinLoginScreenState extends State<PinLoginScreen> {
     }
   }
 
-  void _handleLogin() {
+  Future<void> _handleLogin() async {
     if (!_isPinComplete()) {
       setState(() {
         _errorMessage = 'Please enter your 4-digit PIN';
+      });
+      return;
+    }
+
+    if (_mobileController.text.isEmpty) {
+      setState(() {
+        _errorMessage = 'Please enter your mobile number';
       });
       return;
     }
@@ -83,30 +95,32 @@ class _PinLoginScreenState extends State<PinLoginScreen> {
       _errorMessage = null;
     });
 
-    // TODO: Implement actual PIN verification logic
-    // For now, simulate PIN verification
-    Future.delayed(const Duration(seconds: 1), () {
-      if (mounted) {
-        // TODO: Replace with actual PIN verification
-        // For demo purposes, accept any 4-digit PIN
-        final isValid = enteredPin.length == 4;
-        
-        if (isValid) {
-          // Navigate to home screen
-          Navigator.of(context).pushReplacementNamed('/home');
-        } else {
-          setState(() {
-            _isLoading = false;
-            _errorMessage = 'Invalid PIN. Please try again.';
-          });
-          // Clear PIN fields
-          for (var controller in _pinControllers) {
-            controller.clear();
-          }
-          _pinFocusNodes[0].requestFocus();
+    final authProvider = Provider.of<AuthProvider>(context, listen: false);
+    final success = _isCompanyUser
+        ? await authProvider.loginAsCompanyUser(
+            _mobileController.text.trim(),
+            enteredPin,
+          )
+        : await authProvider.loginWithPIN(
+            _mobileController.text.trim(),
+            enteredPin,
+          );
+
+    if (mounted) {
+      if (success) {
+        Navigator.of(context).pushReplacementNamed('/home');
+      } else {
+        setState(() {
+          _isLoading = false;
+          _errorMessage = authProvider.error ?? 'Invalid PIN. Please try again.';
+        });
+        // Clear PIN fields
+        for (var controller in _pinControllers) {
+          controller.clear();
         }
+        _pinFocusNodes[0].requestFocus();
       }
-    });
+    }
   }
 
   @override
@@ -144,7 +158,17 @@ class _PinLoginScreenState extends State<PinLoginScreen> {
                   // Header Section
                   _buildHeader(textTheme),
 
-                  const SizedBox(height: 48.0),
+                  const SizedBox(height: 32.0),
+
+                  // User Type Toggle
+                  _buildUserTypeToggle(),
+
+                  const SizedBox(height: 24.0),
+
+                  // Mobile Number Field
+                  _buildMobileField(textTheme),
+
+                  const SizedBox(height: 32.0),
 
                   // PIN Input Section
                   _buildPinInput(),
@@ -186,12 +210,90 @@ class _PinLoginScreenState extends State<PinLoginScreen> {
         ),
         const SizedBox(height: 12.0),
         Text(
-          'Enter your 4-digit PIN to continue',
+          _isCompanyUser
+              ? 'Enter your mobile number and 4-digit PIN to login as company user'
+              : 'Enter your 4-digit PIN to continue',
           style: textTheme.bodyMedium?.copyWith(
             color: AppColors.textSecondary,
           ),
         ),
       ],
+    );
+  }
+
+  Widget _buildUserTypeToggle() {
+    return Container(
+      padding: const EdgeInsets.all(4.0),
+      decoration: BoxDecoration(
+        color: AppColors.offWhite,
+        borderRadius: BorderRadius.circular(12.0),
+      ),
+      child: Row(
+        children: [
+          Expanded(
+            child: GestureDetector(
+              onTap: () {
+                setState(() {
+                  _isCompanyUser = false;
+                  _errorMessage = null;
+                });
+              },
+              child: Container(
+                padding: const EdgeInsets.symmetric(vertical: 12.0),
+                decoration: BoxDecoration(
+                  color: !_isCompanyUser
+                      ? AppColors.primary
+                      : Colors.transparent,
+                  borderRadius: BorderRadius.circular(8.0),
+                ),
+                child: Text(
+                  'Transporter',
+                  textAlign: TextAlign.center,
+                  style: Theme.of(context).textTheme.bodyMedium?.copyWith(
+                        color: !_isCompanyUser
+                            ? AppColors.background
+                            : AppColors.textSecondary,
+                        fontWeight: !_isCompanyUser
+                            ? FontWeight.w600
+                            : FontWeight.normal,
+                      ),
+                ),
+              ),
+            ),
+          ),
+          Expanded(
+            child: GestureDetector(
+              onTap: () {
+                setState(() {
+                  _isCompanyUser = true;
+                  _errorMessage = null;
+                });
+              },
+              child: Container(
+                padding: const EdgeInsets.symmetric(vertical: 12.0),
+                decoration: BoxDecoration(
+                  color: _isCompanyUser
+                      ? AppColors.primary
+                      : Colors.transparent,
+                  borderRadius: BorderRadius.circular(8.0),
+                ),
+                child: Text(
+                  'Company User',
+                  textAlign: TextAlign.center,
+                  style: Theme.of(context).textTheme.bodyMedium?.copyWith(
+                        color: _isCompanyUser
+                            ? AppColors.background
+                            : AppColors.textSecondary,
+                        fontWeight: _isCompanyUser
+                            ? FontWeight.w600
+                            : FontWeight.normal,
+                      ),
+                ),
+              ),
+            ),
+          ),
+        ],
+      ),
     );
   }
 
@@ -333,6 +435,20 @@ class _PinLoginScreenState extends State<PinLoginScreen> {
                 ),
               ),
       ),
+    );
+  }
+
+  Widget _buildMobileField(TextTheme textTheme) {
+    return TextFormField(
+      controller: _mobileController,
+      keyboardType: TextInputType.phone,
+      textInputAction: TextInputAction.next,
+      decoration: const InputDecoration(
+        labelText: 'Mobile Number',
+        hintText: 'Enter your mobile number',
+        prefixIcon: Icon(Icons.phone_outlined),
+      ),
+      onChanged: (_) => setState(() {}),
     );
   }
 
