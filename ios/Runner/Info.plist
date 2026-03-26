@@ -47,5 +47,13 @@
 	<true/>
 	<key>NSContactsUsageDescription</key>
 	<string>This app needs access to your contacts to select drivers for trips.</string>
+	<key>NSLocationWhenInUseUsageDescription</key>
+	<string>This app needs your location to show your position on the map and for trip tracking.</string>
+	<key>NSLocationAlwaysAndWhenInUseUsageDescription</key>
+	<string>This app needs your location to track trips in the background.</string>
+	<key>NSCameraUsageDescription</key>
+	<string>This app needs camera access to capture documents and photos.</string>
+	<key>GOOGLE_PLACES_API_KEY</key>
+	<string>AIzaSyA6EcL6hrD0iQpwk6ETUQNSieeEBYUR1_U</string>
 </dict>
 </plist>

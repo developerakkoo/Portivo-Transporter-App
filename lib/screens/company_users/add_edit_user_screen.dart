@@ -4,6 +4,7 @@ import 'package:provider/provider.dart';
 import '../../core/theme/app_colors.dart';
 import '../../data/models/company_user_model.dart';
 import '../../providers/company_user_provider.dart';
+import '../../widgets/pin_digit_field.dart';
 
 enum PinSetupStep {
   enter,
@@ -560,69 +561,61 @@ class _AddEditUserScreenState extends State<AddEditUserScreen> {
   }) {
     final isFocused = focusNode.hasFocus;
     final hasValue = controller.text.isNotEmpty;
+    final controllers = _pinStep == PinSetupStep.enter
+        ? _pinControllers
+        : _confirmPinControllers;
+    final focusNodes = _pinStep == PinSetupStep.enter
+        ? _pinFocusNodes
+        : _confirmFocusNodes;
 
-    return SizedBox(
-      width: 70.0,
-      height: 70.0,
-      child: TextFormField(
-        controller: controller,
-        focusNode: focusNode,
-        textAlign: TextAlign.center,
-        keyboardType: TextInputType.number,
-        maxLength: 1,
-        inputFormatters: [
-          FilteringTextInputFormatter.digitsOnly,
-        ],
-        style: Theme.of(context).textTheme.headlineMedium?.copyWith(
-              color: AppColors.textPrimary,
-              fontWeight: FontWeight.w600,
-            ),
-        decoration: InputDecoration(
-          counterText: '',
-          filled: true,
-          fillColor: hasValue || isFocused
-              ? AppColors.background
-              : AppColors.offWhite,
-          contentPadding: EdgeInsets.zero,
-          border: OutlineInputBorder(
-            borderRadius: BorderRadius.circular(16.0),
-            borderSide: BorderSide(
-              color: isFocused ? AppColors.primary : AppColors.dividerGrey,
-              width: isFocused ? 2.0 : 1.0,
-            ),
+    return PinDigitField(
+      index: index,
+      controller: controller,
+      focusNode: focusNode,
+      controllers: controllers,
+      focusNodes: focusNodes,
+      onChanged: (value) {
+        setState(() {});
+        _handlePinInput(
+          value,
+          index,
+          controllers,
+          focusNodes,
+        );
+      },
+      onStateChanged: () => setState(() {}),
+      style: Theme.of(context).textTheme.headlineMedium?.copyWith(
+            color: AppColors.textPrimary,
+            fontWeight: FontWeight.w600,
           ),
-          enabledBorder: OutlineInputBorder(
-            borderRadius: BorderRadius.circular(16.0),
-            borderSide: BorderSide(
-              color: isFocused ? AppColors.primary : AppColors.dividerGrey,
-              width: isFocused ? 2.0 : 1.0,
-            ),
-          ),
-          focusedBorder: OutlineInputBorder(
-            borderRadius: BorderRadius.circular(16.0),
-            borderSide: const BorderSide(
-              color: AppColors.primary,
-              width: 2.0,
-            ),
+      decoration: InputDecoration(
+        counterText: '',
+        filled: true,
+        fillColor: hasValue || isFocused
+            ? AppColors.background
+            : AppColors.offWhite,
+        contentPadding: EdgeInsets.zero,
+        border: OutlineInputBorder(
+          borderRadius: BorderRadius.circular(16.0),
+          borderSide: BorderSide(
+            color: isFocused ? AppColors.primary : AppColors.dividerGrey,
+            width: isFocused ? 2.0 : 1.0,
           ),
         ),
-        onChanged: (value) {
-          setState(() {});
-          _handlePinInput(
-            value,
-            index,
-            _pinStep == PinSetupStep.enter
-                ? _pinControllers
-                : _confirmPinControllers,
-            _pinStep == PinSetupStep.enter
-                ? _pinFocusNodes
-                : _confirmFocusNodes,
-          );
-        },
-        onTap: () {
-          setState(() {});
-        },
-        buildCounter: (context, {required currentLength, required isFocused, maxLength}) => null,
+        enabledBorder: OutlineInputBorder(
+          borderRadius: BorderRadius.circular(16.0),
+          borderSide: BorderSide(
+            color: isFocused ? AppColors.primary : AppColors.dividerGrey,
+            width: isFocused ? 2.0 : 1.0,
+          ),
+        ),
+        focusedBorder: OutlineInputBorder(
+          borderRadius: BorderRadius.circular(16.0),
+          borderSide: const BorderSide(
+            color: AppColors.primary,
+            width: 2.0,
+          ),
+        ),
       ),
     );
   }

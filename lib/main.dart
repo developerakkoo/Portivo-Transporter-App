@@ -5,11 +5,15 @@ import 'core/theme/app_theme.dart';
 import 'services/storage_service.dart';
 import 'providers/auth_provider.dart';
 import 'providers/trip_provider.dart';
+import 'providers/notification_provider.dart';
+import 'providers/navigation_state_provider.dart';
 import 'providers/vehicle_provider.dart';
 import 'providers/driver_provider.dart';
 import 'providers/fuel_provider.dart';
 import 'providers/wallet_provider.dart';
 import 'providers/company_user_provider.dart';
+import 'providers/pinned_trips_provider.dart';
+import 'screens/splash_screen.dart';
 import 'screens/login.dart';
 import 'screens/register.dart';
 import 'screens/pin_setup.dart';
@@ -30,6 +34,7 @@ import 'screens/vehicles/add_edit_vehicle_screen.dart';
 import 'screens/notifications.dart';
 import 'screens/support.dart';
 import 'screens/trip_detail.dart';
+import 'screens/map_screen.dart';
 
 void main() async {
   WidgetsFlutterBinding.ensureInitialized();
@@ -234,13 +239,44 @@ class MyApp extends StatelessWidget {
             rethrow;
           }
         }),
+        ChangeNotifierProvider(create: (_) {
+          try {
+            return NotificationProvider();
+          } catch (e) {
+            if (kDebugMode) {
+              print('Error creating NotificationProvider: $e');
+            }
+            rethrow;
+          }
+        }),
+        ChangeNotifierProvider(create: (_) {
+          try {
+            return NavigationStateProvider();
+          } catch (e) {
+            if (kDebugMode) {
+              print('Error creating NavigationStateProvider: $e');
+            }
+            rethrow;
+          }
+        }),
+        ChangeNotifierProvider(create: (_) {
+          try {
+            return PinnedTripsProvider();
+          } catch (e) {
+            if (kDebugMode) {
+              print('Error creating PinnedTripsProvider: $e');
+            }
+            rethrow;
+          }
+        }),
       ],
       child: MaterialApp(
         debugShowCheckedModeBanner: false,
         title: 'Prottivo Transporter',
         theme: AppTheme.lightTheme(),
-        initialRoute: '/login',
+        initialRoute: '/splash',
         routes: {
+          '/splash': (context) => const SplashScreen(),
           '/login': (context) => const LoginScreen(),
           '/register': (context) => const RegisterScreen(),
           '/pin-setup': (context) {
@@ -270,6 +306,7 @@ class MyApp extends StatelessWidget {
           '/notifications': (context) => const NotificationsScreen(),
           '/support': (context) => const SupportScreen(),
           '/trip-detail': (context) => const TripDetailScreen(),
+          '/map': (context) => const MapScreen(),
         },
       ),
     );

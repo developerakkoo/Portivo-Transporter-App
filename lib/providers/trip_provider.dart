@@ -10,22 +10,44 @@ class TripProvider with ChangeNotifier {
   final SocketService _socketService = SocketService();
 
   List<TripModel> _trips = [];
+  List<TripModel> _availableTrips = [];
   Map<String, List<TripModel>> _tripsByStatus = {};
   TripModel? _selectedTrip;
   bool _isLoading = false;
   String? _error;
 
   List<TripModel> get trips => _trips;
+  List<TripModel> get availableTrips => _availableTrips;
   List<TripModel> get activeTrips => _tripsByStatus[AppConstants.tripStatusActive] ?? [];
+  List<TripModel> get acceptedTrips => _tripsByStatus[AppConstants.tripStatusAccepted] ?? [];
   List<TripModel> get completedTrips => _tripsByStatus[AppConstants.tripStatusCompleted] ?? [];
   List<TripModel> get podPendingTrips => _tripsByStatus[AppConstants.tripStatusPodPending] ?? [];
   List<TripModel> get plannedTrips => _tripsByStatus[AppConstants.tripStatusPlanned] ?? [];
+  /// Trips with status BOOKED from GET /api/trips (e.g. customer-booked awaiting acceptance)
+  List<TripModel> get bookedTrips => _tripsByStatus[AppConstants.tripStatusBooked] ?? [];
   TripModel? get selectedTrip => _selectedTrip;
   bool get isLoading => _isLoading;
   String? get error => _error;
 
+  /// Single in-flight bootstrap so [HomeTab] and [TripsTab] do not double-fetch pages.
+  Future<void>? _tripsBootstrapFuture;
+
   TripProvider() {
     _setupSocketListeners();
+  }
+
+  /// Runs [loadTrips] + [loadAvailableTrips] once per concurrent burst (shared [Future]).
+  Future<void> bootstrapTripsIfNeeded() {
+    return _tripsBootstrapFuture ??= _runTripsBootstrap();
+  }
+
+  Future<void> _runTripsBootstrap() async {
+    try {
+      await loadTrips(refresh: true);
+      await loadAvailableTrips(refresh: true);
+    } finally {
+      _tripsBootstrapFuture = null;
+    }
   }
 
   void _setupSocketListeners() {
@@ -36,6 +58,21 @@ class TripProvider with ChangeNotifier {
       if (data['trip'] != null) {
         final trip = TripModel.fromJson(data['trip']);
         _addTripToList(trip);
+        if (trip.status == AppConstants.tripStatusBooked) {
+          _addToAvailableTrips(trip);
+        }
+        notifyListeners();
+      }
+    };
+
+    _socketService.onTripCustomerAssigned = (data) {
+      if (kDebugMode) {
+        print('TripProvider: Socket event - trip:customer:assigned');
+      }
+      if (data['trip'] != null) {
+        final trip = TripModel.fromJson(data['trip']);
+        _removeFromAvailableTrips(trip.id);
+        _updateTripInList(trip);
         notifyListeners();
       }
     };
@@ -65,6 +102,17 @@ class TripProvider with ChangeNotifier {
     _socketService.onTripCompleted = (data) {
       if (kDebugMode) {
         print('TripProvider: Socket event - trip:completed');
+      }
+      if (data['trip'] != null) {
+        final trip = TripModel.fromJson(data['trip']);
+        _updateTripInList(trip);
+        notifyListeners();
+      }
+    };
+
+    _socketService.onTripPodPending = (data) {
+      if (kDebugMode) {
+        print('TripProvider: Socket event - trip:pod:pending');
       }
       if (data['trip'] != null) {
         final trip = TripModel.fromJson(data['trip']);
@@ -106,9 +154,9 @@ class TripProvider with ChangeNotifier {
       }
     };
 
-    _socketService.onTripCancelled = (data) {
+    _socketService.onTripClosedWithoutPOD = (data) {
       if (kDebugMode) {
-        print('TripProvider: Socket event - trip:cancelled');
+        print('TripProvider: Socket event - trip:closed:without-pod');
       }
       if (data['trip'] != null) {
         final trip = TripModel.fromJson(data['trip']);
@@ -116,6 +164,80 @@ class TripProvider with ChangeNotifier {
         notifyListeners();
       }
     };
+
+    _socketService.onTripVehicleAssigned = (data) {
+      if (kDebugMode) {
+        print('TripProvider: Socket event - trip:vehicle:assigned');
+      }
+      if (data['trip'] != null) {
+        final trip = TripModel.fromJson(data['trip']);
+        _updateTripInList(trip);
+        notifyListeners();
+      }
+    };
+
+    _socketService.onTripDriverAssigned = (data) {
+      if (kDebugMode) {
+        print('TripProvider: Socket event - trip:driver:assigned');
+      }
+      if (data['trip'] != null) {
+        final trip = TripModel.fromJson(data['trip']);
+        _updateTripInList(trip);
+        notifyListeners();
+      }
+    };
+
+    _socketService.onTripCustomerAccepted = (data) {
+      if (kDebugMode) {
+        print('TripProvider: Socket event - trip:customer:accepted');
+      }
+      if (data['trip'] != null) {
+        final trip = TripModel.fromJson(data['trip']);
+        _removeFromAvailableTrips(trip.id);
+        _updateTripInList(trip);
+        notifyListeners();
+      }
+    };
+
+    _socketService.onTripCustomerRejected = (data) {
+      if (kDebugMode) {
+        print('TripProvider: Socket event - trip:customer:rejected');
+      }
+      if (data['tripId'] != null) {
+        _removeFromAvailableTrips(data['tripId'].toString());
+        notifyListeners();
+      } else if (data['trip'] != null) {
+        final trip = TripModel.fromJson(data['trip']);
+        _removeFromAvailableTrips(trip.id);
+        _updateTripInList(trip);
+        notifyListeners();
+      }
+    };
+
+    _socketService.onTripCancelled = (data) {
+      if (kDebugMode) {
+        print('TripProvider: Socket event - trip:cancelled');
+      }
+      if (data['trip'] != null) {
+        final trip = TripModel.fromJson(data['trip']);
+        _removeFromAvailableTrips(trip.id);
+        _updateTripInList(trip);
+        notifyListeners();
+      }
+    };
+  }
+
+  void _addToAvailableTrips(TripModel trip) {
+    final existingIndex = _availableTrips.indexWhere((t) => t.id == trip.id);
+    if (existingIndex != -1) {
+      _availableTrips[existingIndex] = trip;
+    } else {
+      _availableTrips.insert(0, trip);
+    }
+  }
+
+  void _removeFromAvailableTrips(String tripId) {
+    _availableTrips.removeWhere((t) => t.id == tripId);
   }
 
   void _addTripToList(TripModel trip) {
@@ -171,14 +293,23 @@ class TripProvider with ChangeNotifier {
 
   void _updateTripsByStatus() {
     _tripsByStatus = {
+      AppConstants.tripStatusBooked: _trips.where((t) => t.status == AppConstants.tripStatusBooked).toList(),
+      AppConstants.tripStatusAccepted: _trips.where((t) => t.status == AppConstants.tripStatusAccepted).toList(),
       AppConstants.tripStatusPlanned: _trips.where((t) => t.status == AppConstants.tripStatusPlanned).toList(),
       AppConstants.tripStatusActive: _trips.where((t) => t.status == AppConstants.tripStatusActive).toList(),
-      AppConstants.tripStatusCompleted: _trips.where((t) => t.status == AppConstants.tripStatusCompleted).toList(),
+      AppConstants.tripStatusCompleted: _trips.where((t) => AppConstants.tripStatusesCompleted.contains(t.status)).toList(),
       AppConstants.tripStatusPodPending: _trips.where((t) => t.status == AppConstants.tripStatusPodPending).toList(),
       AppConstants.tripStatusCancelled: _trips.where((t) => t.status == AppConstants.tripStatusCancelled).toList(),
     };
   }
 
+  /// Loads all trips for this transporter from [TripService.getTrips] with multi-page fetch.
+  ///
+  /// Backend: [Porttivo-API/src/controllers/trip.controller.js] `getTrips` sorts by `createdAt` desc
+  /// and paginates. Status lifecycle for execution is implemented in
+  /// [Porttivo-API/src/controllers/tripStatus.controller.js] (`acceptTripByDriver`, `startTrip`, `completeTrip`).
+  /// Customer booking vs transporter create: [Porttivo-API/src/controllers/trip.controller.js]
+  /// (`createTrip`, customer book, `acceptCustomerTrip`, `finalizeAssignmentState`).
   Future<void> loadTrips({
     String? status,
     String? vehicleId,
@@ -202,6 +333,7 @@ class TripProvider with ChangeNotifier {
         vehicleId: vehicleId,
         driverId: driverId,
         tripType: tripType,
+        fetchAllPages: true,
       );
 
       if (refresh) {
@@ -232,6 +364,73 @@ class TripProvider with ChangeNotifier {
     }
   }
 
+  Future<void> loadAvailableTrips({bool refresh = false}) async {
+    _isLoading = true;
+    _error = null;
+    notifyListeners();
+
+    try {
+      final trips = await _tripService.getAvailableCustomerTrips();
+      if (refresh) {
+        _availableTrips = trips;
+      } else {
+        for (final trip in trips) {
+          _addToAvailableTrips(trip);
+        }
+      }
+      if (kDebugMode) {
+        print('TripProvider: Loaded ${trips.length} available trips');
+      }
+    } catch (e, stackTrace) {
+      _error = ErrorUtils.extractErrorMessage(e);
+      if (kDebugMode) {
+        print('TripProvider: Error loading available trips: $_error');
+        print('Stack: $stackTrace');
+      }
+      if (refresh) {
+        _availableTrips = [];
+      }
+    } finally {
+      _isLoading = false;
+      notifyListeners();
+    }
+  }
+
+  Future<bool> acceptTrip(String tripId) async {
+    try {
+      final trip = await _tripService.acceptCustomerTrip(tripId);
+      if (trip != null) {
+        _removeFromAvailableTrips(tripId);
+        await loadTrips(refresh: true);
+        await loadAvailableTrips(refresh: true);
+        return true;
+      }
+      return false;
+    } catch (e) {
+      if (kDebugMode) {
+        print('TripProvider: Error accepting trip: $e');
+      }
+      rethrow;
+    }
+  }
+
+  Future<bool> rejectTrip(String tripId) async {
+    try {
+      final success = await _tripService.rejectCustomerTrip(tripId);
+      if (success) {
+        _removeFromAvailableTrips(tripId);
+        await loadAvailableTrips(refresh: true);
+        return true;
+      }
+      return false;
+    } catch (e) {
+      if (kDebugMode) {
+        print('TripProvider: Error rejecting trip: $e');
+      }
+      rethrow;
+    }
+  }
+
   Future<void> loadTripsByStatus(String status) async {
     _isLoading = true;
     _error = null;
@@ -251,14 +450,30 @@ class TripProvider with ChangeNotifier {
     }
   }
 
-  Future<TripModel?> getTripById(String id) async {
-    _isLoading = true;
-    _error = null;
-    notifyListeners();
+  /// Returns trip from _trips if present (fresher from socket), for real-time updates.
+  TripModel? getTripForDetail(String id) {
+    try {
+      return _trips.firstWhere((t) => t.id == id);
+    } catch (_) {
+      return null;
+    }
+  }
+
+  /// [silent] avoids toggling global loading (trip detail uses its own spinner).
+  Future<TripModel?> getTripById(String id, {bool silent = false}) async {
+    if (!silent) {
+      _isLoading = true;
+      _error = null;
+      notifyListeners();
+    }
 
     try {
       final trip = await _tripService.getTripById(id);
       _selectedTrip = trip;
+      if (trip != null) {
+        _addTripToList(trip);
+        _socketService.joinTripRoom(trip.id);
+      }
       return trip;
     } catch (e) {
       _error = ErrorUtils.extractErrorMessage(e);
@@ -267,8 +482,12 @@ class TripProvider with ChangeNotifier {
       }
       return null;
     } finally {
-      _isLoading = false;
-      notifyListeners();
+      if (!silent) {
+        _isLoading = false;
+        notifyListeners();
+      } else {
+        notifyListeners();
+      }
     }
   }
 
@@ -312,6 +531,54 @@ class TripProvider with ChangeNotifier {
       _error = ErrorUtils.extractErrorMessage(e);
       if (kDebugMode) {
         print('TripProvider: Error updating trip: $_error');
+      }
+      return false;
+    } finally {
+      _isLoading = false;
+      notifyListeners();
+    }
+  }
+
+  Future<bool> assignVehicle(String tripId, String vehicleId) async {
+    _isLoading = true;
+    _error = null;
+    notifyListeners();
+
+    try {
+      final trip = await _tripService.assignVehicle(tripId, vehicleId);
+      if (trip != null) {
+        _updateTripInList(trip);
+        return true;
+      }
+      return false;
+    } catch (e) {
+      _error = ErrorUtils.extractErrorMessage(e);
+      if (kDebugMode) {
+        print('TripProvider: Error assigning vehicle: $_error');
+      }
+      return false;
+    } finally {
+      _isLoading = false;
+      notifyListeners();
+    }
+  }
+
+  Future<bool> assignDriver(String tripId, String driverId) async {
+    _isLoading = true;
+    _error = null;
+    notifyListeners();
+
+    try {
+      final trip = await _tripService.assignDriver(tripId, driverId);
+      if (trip != null) {
+        _updateTripInList(trip);
+        return true;
+      }
+      return false;
+    } catch (e) {
+      _error = ErrorUtils.extractErrorMessage(e);
+      if (kDebugMode) {
+        print('TripProvider: Error assigning driver: $_error');
       }
       return false;
     } finally {
@@ -383,6 +650,30 @@ class TripProvider with ChangeNotifier {
       _error = ErrorUtils.extractErrorMessage(e);
       if (kDebugMode) {
         print('TripProvider: Error completing trip: $_error');
+      }
+      return false;
+    } finally {
+      _isLoading = false;
+      notifyListeners();
+    }
+  }
+
+  Future<bool> closeTripWithoutPOD(String id) async {
+    _isLoading = true;
+    _error = null;
+    notifyListeners();
+
+    try {
+      final trip = await _tripService.closeTripWithoutPOD(id);
+      if (trip != null) {
+        _updateTripInList(trip);
+        return true;
+      }
+      return false;
+    } catch (e) {
+      _error = ErrorUtils.extractErrorMessage(e);
+      if (kDebugMode) {
+        print('TripProvider: Error closing trip without POD: $_error');
       }
       return false;
     } finally {

@@ -2,7 +2,9 @@ import 'package:flutter/material.dart';
 import 'package:provider/provider.dart';
 import '../core/theme/app_colors.dart';
 import '../data/models/fuel_card_model.dart';
+import '../data/models/driver_model.dart';
 import '../providers/fuel_provider.dart';
+import '../providers/driver_provider.dart';
 import '../providers/auth_provider.dart';
 import '../services/permission_service.dart';
 
@@ -19,6 +21,7 @@ class _FuelCardsScreenState extends State<FuelCardsScreen> {
     super.initState();
     WidgetsBinding.instance.addPostFrameCallback((_) {
       context.read<FuelProvider>().loadFuelCards();
+      context.read<DriverProvider>().loadDrivers(refresh: true);
     });
   }
 
@@ -27,6 +30,87 @@ class _FuelCardsScreenState extends State<FuelCardsScreen> {
       '/fuel-card-qr',
       arguments: card,
     );
+  }
+
+  Future<void> _showAssignDialog(FuelCardModel card) async {
+    final driverProvider = context.read<DriverProvider>();
+    await driverProvider.loadDrivers(refresh: true);
+    final drivers = driverProvider.drivers;
+
+    if (!mounted) return;
+    if (drivers.isEmpty) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(
+          content: Text('No drivers available. Add drivers first.'),
+          backgroundColor: Colors.orange,
+        ),
+      );
+      return;
+    }
+
+    final selected = await showModalBottomSheet<DriverModel>(
+      context: context,
+      isScrollControlled: true,
+      builder: (context) => DraggableScrollableSheet(
+        initialChildSize: 0.5,
+        maxChildSize: 0.9,
+        minChildSize: 0.3,
+        expand: false,
+        builder: (context, scrollController) => Column(
+          children: [
+            const Padding(
+              padding: EdgeInsets.all(16.0),
+              child: Text(
+                'Select Driver to Assign',
+                style: TextStyle(
+                  fontSize: 18,
+                  fontWeight: FontWeight.bold,
+                ),
+              ),
+            ),
+            Expanded(
+              child: ListView.builder(
+                controller: scrollController,
+                itemCount: drivers.length,
+                itemBuilder: (context, index) {
+                  final driver = drivers[index];
+                  return ListTile(
+                    title: Text(driver.name ?? ''),
+                    subtitle: Text(driver.mobile),
+                    onTap: () => Navigator.of(context).pop(driver),
+                  );
+                },
+              ),
+            ),
+          ],
+        ),
+      ),
+    );
+
+    if (selected != null && mounted) {
+      final fuelProvider = context.read<FuelProvider>();
+      final result = await fuelProvider.assignFuelCard(
+        cardId: card.id,
+        driverId: selected.id,
+      );
+      if (mounted) {
+        if (result != null) {
+          ScaffoldMessenger.of(context).showSnackBar(
+            const SnackBar(
+              content: Text('Fuel card assigned successfully'),
+              backgroundColor: Colors.green,
+            ),
+          );
+        } else {
+          ScaffoldMessenger.of(context).showSnackBar(
+            SnackBar(
+              content: Text(fuelProvider.error ?? 'Failed to assign'),
+              backgroundColor: Colors.red,
+            ),
+          );
+        }
+      }
+    }
   }
 
   @override
@@ -260,26 +344,67 @@ class _FuelCardsScreenState extends State<FuelCardsScreen> {
               ],
             ),
           ),
-          // QR Code Icon Button (positioned at top-right)
+          // Action buttons (top-right)
           Positioned(
             top: 16.0,
             right: 16.0,
-            child: Container(
-              decoration: BoxDecoration(
-                color: AppColors.background.withOpacity(0.2),
-                borderRadius: BorderRadius.circular(8.0),
-              ),
-              child: IconButton(
-                icon: const Icon(
-                  Icons.qr_code,
-                  color: AppColors.background,
-                  size: 24.0,
+            child: Row(
+              mainAxisSize: MainAxisSize.min,
+              children: [
+                if (card.status == 'active')
+                  Container(
+                    margin: const EdgeInsets.only(right: 8.0),
+                    decoration: BoxDecoration(
+                      color: AppColors.background.withOpacity(0.2),
+                      borderRadius: BorderRadius.circular(8.0),
+                    ),
+                    child: IconButton(
+                      icon: const Icon(
+                        Icons.person_add,
+                        color: AppColors.background,
+                        size: 22.0,
+                      ),
+                      onPressed: () => _showAssignDialog(card),
+                      tooltip: 'Assign to Driver',
+                    ),
+                  ),
+                Container(
+                  decoration: BoxDecoration(
+                    color: AppColors.background.withOpacity(0.2),
+                    borderRadius: BorderRadius.circular(8.0),
+                  ),
+                  child: IconButton(
+                    icon: const Icon(
+                      Icons.qr_code,
+                      color: AppColors.background,
+                      size: 24.0,
+                    ),
+                    onPressed: () => _viewQRCode(card),
+                    tooltip: 'View QR Code',
+                  ),
                 ),
-                onPressed: () => _viewQRCode(card),
-                tooltip: 'View QR Code',
-              ),
+              ],
             ),
           ),
+          if (card.driverId != null)
+            Positioned(
+              bottom: 16.0,
+              left: 24.0,
+              child: Container(
+                padding: const EdgeInsets.symmetric(horizontal: 8.0, vertical: 4.0),
+                decoration: BoxDecoration(
+                  color: AppColors.background.withOpacity(0.3),
+                  borderRadius: BorderRadius.circular(8.0),
+                ),
+                child: Text(
+                  'Assigned to driver',
+                  style: textTheme.bodySmall?.copyWith(
+                    color: AppColors.background,
+                    fontSize: 12.0,
+                  ),
+                ),
+              ),
+            ),
         ],
       ),
     );

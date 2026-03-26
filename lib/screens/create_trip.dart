@@ -2,9 +2,11 @@ import 'package:flutter/material.dart';
 import 'package:provider/provider.dart';
 import '../core/theme/app_colors.dart';
 import '../core/constants/app_constants.dart';
+import '../data/models/trip_model.dart';
 import '../data/models/vehicle_model.dart';
 import '../data/models/driver_model.dart';
 import '../providers/trip_provider.dart';
+import 'location_picker_screen.dart';
 import '../providers/vehicle_provider.dart';
 import '../providers/driver_provider.dart';
 import '../providers/auth_provider.dart';
@@ -17,27 +19,32 @@ class CreateTripScreen extends StatefulWidget {
   State<CreateTripScreen> createState() => _CreateTripScreenState();
 }
 
+class _AssignmentEntry {
+  final TextEditingController containerController;
+  VehicleModel? vehicle;
+  DriverModel? driver;
+  _AssignmentEntry()
+      : containerController = TextEditingController();
+  void dispose() => containerController.dispose();
+}
+
 class _CreateTripScreenState extends State<CreateTripScreen> {
   final _formKey = GlobalKey<FormState>();
-  
+
   String? _selectedTripType;
-  VehicleModel? _selectedVehicle;
-  DriverModel? _selectedDriver;
+  final List<_AssignmentEntry> _assignments = [];
   final _pickupLocationController = TextEditingController();
   final _dropLocationController = TextEditingController();
-  final _containerNumberController = TextEditingController();
   final _tripReferenceController = TextEditingController();
+  final _customerNameController = TextEditingController();
+  TripLocation? _pickupLocation;
+  TripLocation? _dropLocation;
   bool _isLoading = false;
-  
-  // Dummy coordinates for Mumbai (pickup) and Pune (drop)
-  static const double _dummyPickupLat = 19.0760;
-  static const double _dummyPickupLng = 72.8777;
-  static const double _dummyDropLat = 18.5204;
-  static const double _dummyDropLng = 73.8567;
 
   @override
   void initState() {
     super.initState();
+    _assignments.add(_AssignmentEntry());
     WidgetsBinding.instance.addPostFrameCallback((_) {
       context.read<VehicleProvider>().loadVehicles(status: 'active');
       context.read<DriverProvider>().loadDrivers();
@@ -46,81 +53,91 @@ class _CreateTripScreenState extends State<CreateTripScreen> {
 
   @override
   void dispose() {
+    for (final e in _assignments) {
+      e.dispose();
+    }
     _pickupLocationController.dispose();
     _dropLocationController.dispose();
     _tripReferenceController.dispose();
-    _containerNumberController.dispose();
+    _customerNameController.dispose();
     super.dispose();
   }
 
+  void _addAssignment() {
+    setState(() => _assignments.add(_AssignmentEntry()));
+  }
 
-  void _setDummyLocation(bool isPickup) {
+  void _removeAssignment(int index) {
+    if (_assignments.length <= 1) return;
     setState(() {
-      if (isPickup) {
-        _pickupLocationController.text = 'Port Mumbai (Dummy Location)';
-      } else {
-        _dropLocationController.text = 'Factory Pune (Dummy Location)';
-      }
+      _assignments[index].dispose();
+      _assignments.removeAt(index);
     });
-    ScaffoldMessenger.of(context).showSnackBar(
-      SnackBar(
-        content: Text(isPickup 
-          ? 'Using dummy pickup location (Mumbai Port)' 
-          : 'Using dummy drop location (Pune Factory)'),
-        duration: const Duration(seconds: 2),
-      ),
-    );
   }
 
-  Future<void> _selectDriver(BuildContext context) async {
-    final driverProvider = context.read<DriverProvider>();
-    final drivers = driverProvider.drivers;
-    
-    if (drivers.isEmpty) {
-      ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(content: Text('No drivers available')),
-      );
-      return;
-    }
-
-    final selectedDriver = await showDialog<DriverModel>(
-      context: context,
-      builder: (context) => _DriverPickerDialog(drivers: drivers),
-    );
-
-    if (selectedDriver != null) {
-      setState(() {
-        _selectedDriver = selectedDriver;
-      });
-    }
-  }
-
-  Future<void> _selectVehicle(BuildContext context) async {
+  Future<VehicleModel?> _selectVehicleForAssignment(BuildContext context) async {
     final vehicleProvider = context.read<VehicleProvider>();
     final vehicles = vehicleProvider.vehicles;
-    
     if (vehicles.isEmpty) {
       ScaffoldMessenger.of(context).showSnackBar(
         const SnackBar(content: Text('No vehicles available')),
       );
-      return;
+      return null;
     }
-
-    final selectedVehicle = await showDialog<VehicleModel>(
+    return showDialog<VehicleModel>(
       context: context,
       builder: (context) => _VehiclePickerDialog(vehicles: vehicles),
     );
+  }
 
-    if (selectedVehicle != null) {
+  Future<DriverModel?> _selectDriverForAssignment(BuildContext context) async {
+    final driverProvider = context.read<DriverProvider>();
+    final drivers = driverProvider.drivers
+        .where((d) => d.status == AppConstants.driverStatusActive)
+        .toList();
+    if (drivers.isEmpty) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(content: Text('No drivers available')),
+      );
+      return null;
+    }
+    return showDialog<DriverModel>(
+      context: context,
+      builder: (context) => _DriverPickerDialog(drivers: drivers),
+    );
+  }
+
+
+  Future<void> _openLocationPicker(bool isPickup) async {
+    final result = await Navigator.push<TripLocation>(
+      context,
+      MaterialPageRoute(
+        builder: (_) => LocationPickerScreen(
+          isPickup: isPickup,
+          nationalSearch: true,
+          initialQuery: isPickup
+              ? _pickupLocation?.address
+              : _dropLocation?.address,
+        ),
+      ),
+    );
+    if (result != null && mounted) {
       setState(() {
-        _selectedVehicle = selectedVehicle;
+        if (isPickup) {
+          _pickupLocation = result;
+          _pickupLocationController.text = result.address ?? '';
+        } else {
+          _dropLocation = result;
+          _dropLocationController.text = result.address ?? '';
+        }
       });
     }
   }
 
-
   bool get _canCreateTrip {
     return _selectedTripType != null &&
+        _pickupLocation != null &&
+        _dropLocation != null &&
         !_isLoading;
   }
 
@@ -128,53 +145,55 @@ class _CreateTripScreenState extends State<CreateTripScreen> {
     if (_formKey.currentState?.validate() ?? false) {
       if (!_canCreateTrip) return;
 
+      final assignmentsList = <Map<String, dynamic>>[];
+      for (final e in _assignments) {
+        final cn = e.containerController.text.trim().toUpperCase();
+        if (cn.isEmpty || e.vehicle == null || e.driver == null) continue;
+        assignmentsList.add({
+          'containerNumber': cn,
+          'vehicleId': e.vehicle!.id,
+          'driverId': e.driver!.id,
+        });
+      }
+
+      if (assignmentsList.isEmpty) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          const SnackBar(
+            content: Text('Add at least one container with vehicle and driver assigned'),
+            backgroundColor: Colors.orange,
+          ),
+        );
+        return;
+      }
+
       setState(() {
         _isLoading = true;
       });
 
       try {
         final tripProvider = Provider.of<TripProvider>(context, listen: false);
-        
-        // Use dummy coordinates - Mumbai for pickup, Pune for drop
-        final tripData = {
-          if (_selectedVehicle != null) 'vehicleId': _selectedVehicle!.id,
-          if (_selectedDriver != null) 'driverId': _selectedDriver!.id,
-          'containerNumber': _containerNumberController.text.trim().isNotEmpty
-              ? _containerNumberController.text.trim().toUpperCase()
-              : null,
+
+        final tripData = <String, dynamic>{
           'reference': _tripReferenceController.text.trim().isNotEmpty
-              ? _tripReferenceController.text.trim()
+              ? _tripReferenceController.text.trim().toUpperCase()
               : null,
-          'pickupLocation': {
-            'address': _pickupLocationController.text.trim().isNotEmpty
-                ? _pickupLocationController.text.trim()
-                : 'Port Mumbai',
-            'coordinates': {
-              'latitude': _dummyPickupLat,
-              'longitude': _dummyPickupLng,
-            },
-          },
-          'dropLocation': {
-            'address': _dropLocationController.text.trim().isNotEmpty
-                ? _dropLocationController.text.trim()
-                : 'Factory Pune',
-            'coordinates': {
-              'latitude': _dummyDropLat,
-              'longitude': _dummyDropLng,
-            },
-          },
+          'customerName': _customerNameController.text.trim().isNotEmpty
+              ? _customerNameController.text.trim().toUpperCase()
+              : null,
+          'pickupLocation': _pickupLocation!.toJson(),
+          'dropLocation': _dropLocation!.toJson(),
           'tripType': _selectedTripType!.toUpperCase(),
         };
+
+        tripData['assignments'] = assignmentsList;
 
         final trip = await tripProvider.createTrip(tripData);
 
         if (mounted) {
           if (trip != null) {
-            final hasVehicle = _selectedVehicle != null;
-            final hasDriver = _selectedDriver != null;
-            final message = hasVehicle && hasDriver
-                ? 'Trip created successfully'
-                : 'Trip created successfully. ${!hasVehicle ? "Vehicle" : ""}${!hasVehicle && !hasDriver ? " and " : ""}${!hasDriver ? "Driver" : ""} can be assigned later.';
+            final message = assignmentsList.isNotEmpty
+                ? 'Trip created successfully with ${assignmentsList.length} container(s)'
+                : 'Trip created successfully. Assign container, vehicle and driver for each entry.';
             
             Navigator.of(context).pop();
             ScaffoldMessenger.of(context).showSnackBar(
@@ -254,16 +273,12 @@ class _CreateTripScreenState extends State<CreateTripScreen> {
                 _buildTripTypeDropdown(textTheme),
                 const SizedBox(height: 20.0),
 
-                // Container Number
-                _buildContainerNumberField(textTheme),
+                // Assignments (Container + Vehicle + Driver per entry)
+                _buildAssignmentsSection(textTheme),
                 const SizedBox(height: 20.0),
 
-                // Select Vehicle
-                _buildVehicleSelector(textTheme),
-                const SizedBox(height: 20.0),
-
-                // Select Driver
-                _buildDriverSelector(textTheme),
+                // Customer Name
+                _buildCustomerNameField(textTheme),
                 const SizedBox(height: 20.0),
 
                 // Pickup Location
@@ -315,110 +330,148 @@ class _CreateTripScreenState extends State<CreateTripScreen> {
     );
   }
 
-  Widget _buildContainerNumberField(TextTheme textTheme) {
-    return TextFormField(
-      controller: _containerNumberController,
-      textInputAction: TextInputAction.next,
-      textCapitalization: TextCapitalization.characters,
-      decoration: const InputDecoration(
-        labelText: 'Container Number (Optional)',
-        hintText: 'Enter container number',
-        prefixIcon: Icon(Icons.inventory_2_outlined),
-      ),
-    );
-  }
-
-  Widget _buildVehicleSelector(TextTheme textTheme) {
+  Widget _buildAssignmentsSection(TextTheme textTheme) {
     return Column(
       crossAxisAlignment: CrossAxisAlignment.start,
       children: [
         Text(
-          'Select Vehicle (Optional)',
+          'Containers, Vehicles & Drivers',
+          style: textTheme.titleMedium?.copyWith(
+            fontWeight: FontWeight.w600,
+            color: AppColors.textPrimary,
+          ),
+        ),
+        const SizedBox(height: 8.0),
+        Text(
+          'Add at least one container with vehicle and driver. One container = one vehicle = one driver.',
           style: textTheme.bodySmall?.copyWith(
             color: AppColors.textSecondary,
           ),
         ),
-        const SizedBox(height: 8.0),
-        if (_selectedVehicle != null)
-          Container(
-            padding: const EdgeInsets.all(16.0),
-            decoration: BoxDecoration(
-              color: AppColors.offWhite,
-              borderRadius: BorderRadius.circular(12.0),
-              border: Border.all(
-                color: AppColors.dividerGrey,
-                width: 1.0,
+        const SizedBox(height: 12.0),
+        ...List.generate(_assignments.length, (index) {
+          final e = _assignments[index];
+          return Padding(
+            padding: const EdgeInsets.only(bottom: 16.0),
+            child: Card(
+              elevation: 0,
+              shape: RoundedRectangleBorder(
+                borderRadius: BorderRadius.circular(12.0),
+                side: const BorderSide(color: AppColors.dividerGrey, width: 1.0),
               ),
-            ),
-            child: Row(
-              children: [
-                const Icon(Icons.directions_car, color: AppColors.primary),
-                const SizedBox(width: 12.0),
-                Expanded(
-                  child: Column(
-                    crossAxisAlignment: CrossAxisAlignment.start,
-                    children: [
-                      Text(
-                        _selectedVehicle!.vehicleNumber,
-                        style: textTheme.bodyMedium?.copyWith(
-                          fontWeight: FontWeight.w600,
-                          color: AppColors.textPrimary,
-                        ),
-                      ),
-                      if (_selectedVehicle!.trailerType != null)
+              child: Padding(
+                padding: const EdgeInsets.all(16.0),
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    Row(
+                      children: [
                         Text(
-                          _selectedVehicle!.trailerType!,
-                          style: textTheme.bodySmall?.copyWith(
-                            color: AppColors.textSecondary,
+                          'Entry ${index + 1}',
+                          style: textTheme.titleSmall?.copyWith(
+                            fontWeight: FontWeight.w600,
+                            color: AppColors.primary,
                           ),
                         ),
-                    ],
-                  ),
+                        const Spacer(),
+                        if (_assignments.length > 1)
+                          IconButton(
+                            icon: const Icon(Icons.remove_circle_outline, color: AppColors.error, size: 22.0),
+                            onPressed: () => _removeAssignment(index),
+                            tooltip: 'Remove',
+                          ),
+                      ],
+                    ),
+                    const SizedBox(height: 12.0),
+                    TextFormField(
+                      controller: e.containerController,
+                      textInputAction: TextInputAction.next,
+                      textCapitalization: TextCapitalization.characters,
+                      decoration: const InputDecoration(
+                        labelText: 'Container Number',
+                        hintText: 'Enter container number',
+                        prefixIcon: Icon(Icons.inventory_2_outlined),
+                      ),
+                    ),
+                    const SizedBox(height: 12.0),
+                    InkWell(
+                      onTap: () async {
+                        final v = await _selectVehicleForAssignment(context);
+                        if (v != null) setState(() => e.vehicle = v);
+                      },
+                      borderRadius: BorderRadius.circular(12.0),
+                      child: Container(
+                        padding: const EdgeInsets.all(12.0),
+                        decoration: BoxDecoration(
+                          color: AppColors.offWhite,
+                          borderRadius: BorderRadius.circular(12.0),
+                          border: Border.all(color: AppColors.dividerGrey),
+                        ),
+                        child: Row(
+                          children: [
+                            const Icon(Icons.inventory_2, color: AppColors.primary),
+                            const SizedBox(width: 12.0),
+                            Expanded(
+                              child: Text(
+                                e.vehicle != null
+                                    ? '${e.vehicle!.vehicleNumber} (${e.vehicle!.ownerType})'
+                                    : 'Select vehicle',
+                                style: textTheme.bodyMedium?.copyWith(
+                                  color: e.vehicle != null ? AppColors.textPrimary : AppColors.textMuted,
+                                ),
+                              ),
+                            ),
+                            const Icon(Icons.search, color: AppColors.textSecondary, size: 20.0),
+                          ],
+                        ),
+                      ),
+                    ),
+                    const SizedBox(height: 12.0),
+                    InkWell(
+                      onTap: () async {
+                        final d = await _selectDriverForAssignment(context);
+                        if (d != null) setState(() => e.driver = d);
+                      },
+                      borderRadius: BorderRadius.circular(12.0),
+                      child: Container(
+                        padding: const EdgeInsets.all(12.0),
+                        decoration: BoxDecoration(
+                          color: AppColors.offWhite,
+                          borderRadius: BorderRadius.circular(12.0),
+                          border: Border.all(color: AppColors.dividerGrey),
+                        ),
+                        child: Row(
+                          children: [
+                            const Icon(Icons.person, color: AppColors.primary),
+                            const SizedBox(width: 12.0),
+                            Expanded(
+                              child: Text(
+                                e.driver != null
+                                    ? '${e.driver!.name ?? 'Driver'} (${e.driver!.mobile})'
+                                    : 'Select driver',
+                                style: textTheme.bodyMedium?.copyWith(
+                                  color: e.driver != null ? AppColors.textPrimary : AppColors.textMuted,
+                                ),
+                              ),
+                            ),
+                            const Icon(Icons.search, color: AppColors.textSecondary, size: 20.0),
+                          ],
+                        ),
+                      ),
+                    ),
+                  ],
                 ),
-                IconButton(
-                  icon: const Icon(Icons.close, size: 20.0),
-                  onPressed: () {
-                    setState(() {
-                      _selectedVehicle = null;
-                    });
-                  },
-                ),
-              ],
+              ),
             ),
-          )
-        else
-          Consumer<VehicleProvider>(
-            builder: (context, vehicleProvider, child) {
-              if (vehicleProvider.isLoading) {
-                return const Center(child: CircularProgressIndicator());
-              }
-              final vehicles = vehicleProvider.vehicles;
-              return DropdownButtonFormField<VehicleModel>(
-                decoration: const InputDecoration(
-                  labelText: 'Vehicle (Optional)',
-                  hintText: 'Select vehicle or assign later',
-                ),
-                items: vehicles.map((vehicle) {
-                  return DropdownMenuItem<VehicleModel>(
-                    value: vehicle,
-                    child: Text('${vehicle.vehicleNumber} (${vehicle.ownerType})'),
-                  );
-                }).toList(),
-                onChanged: (value) {
-                  setState(() {
-                    _selectedVehicle = value;
-                  });
-                },
-              );
-            },
-          ),
-        const SizedBox(height: 12.0),
+          );
+        }),
+        const SizedBox(height: 8.0),
         SizedBox(
           width: double.infinity,
           child: OutlinedButton.icon(
-            onPressed: () => _selectVehicle(context),
-            icon: const Icon(Icons.search),
-            label: const Text('Search Vehicle'),
+            onPressed: _addAssignment,
+            icon: const Icon(Icons.add),
+            label: const Text('Add Container / Vehicle / Driver'),
             style: OutlinedButton.styleFrom(
               foregroundColor: AppColors.primary,
               side: const BorderSide(color: AppColors.primary, width: 1.5),
@@ -432,145 +485,58 @@ class _CreateTripScreenState extends State<CreateTripScreen> {
     );
   }
 
-  Widget _buildDriverSelector(TextTheme textTheme) {
-    return Column(
-      crossAxisAlignment: CrossAxisAlignment.start,
-      children: [
-        Text(
-          'Select Driver (Optional)',
-          style: textTheme.bodySmall?.copyWith(
-            color: AppColors.textSecondary,
-          ),
-        ),
-        const SizedBox(height: 8.0),
-        InkWell(
-          onTap: () => _selectDriver(context),
-          borderRadius: BorderRadius.circular(12.0),
-          child: Container(
-            padding: const EdgeInsets.all(16.0),
-            decoration: BoxDecoration(
-              color: AppColors.offWhite,
-              borderRadius: BorderRadius.circular(12.0),
-              border: Border.all(
-                color: AppColors.dividerGrey,
-                width: 1.0,
-              ),
-            ),
-            child: Consumer<DriverProvider>(
-              builder: (context, driverProvider, child) {
-                if (driverProvider.isLoading) {
-                  return const Row(
-                    children: [
-                      Icon(Icons.person, color: AppColors.primary),
-                      SizedBox(width: 12.0),
-                      Expanded(child: Text('Loading drivers...')),
-                    ],
-                  );
-                }
-                return Row(
-                  children: [
-                    const Icon(Icons.person, color: AppColors.primary),
-                    const SizedBox(width: 12.0),
-                    Expanded(
-                      child: Text(
-                        _selectedDriver != null
-                            ? '${_selectedDriver!.name ?? 'Driver'} (${_selectedDriver!.mobile})'
-                            : 'Select driver (optional)',
-                        style: textTheme.bodyMedium?.copyWith(
-                          color: _selectedDriver != null
-                              ? AppColors.textPrimary
-                              : AppColors.textMuted,
-                          fontWeight: _selectedDriver != null
-                              ? FontWeight.w500
-                              : FontWeight.normal,
-                        ),
-                      ),
-                    ),
-                    if (_selectedDriver != null)
-                      IconButton(
-                        icon: const Icon(Icons.close, size: 20.0),
-                        onPressed: () {
-                          setState(() {
-                            _selectedDriver = null;
-                          });
-                        },
-                      )
-                    else
-                      const Icon(
-                        Icons.chevron_right,
-                        color: AppColors.textSecondary,
-                      ),
-                  ],
-                );
-              },
-            ),
-          ),
-        ),
-      ],
+  Widget _buildCustomerNameField(TextTheme textTheme) {
+    return TextFormField(
+      controller: _customerNameController,
+      textInputAction: TextInputAction.next,
+      textCapitalization: TextCapitalization.characters,
+      decoration: const InputDecoration(
+        labelText: 'Customer Name (Optional)',
+        hintText: 'Enter customer name',
+        prefixIcon: Icon(Icons.business_outlined),
+      ),
     );
   }
 
   Widget _buildPickupLocationField(TextTheme textTheme) {
-    return Column(
-      crossAxisAlignment: CrossAxisAlignment.start,
-      children: [
-        TextFormField(
+    return InkWell(
+      onTap: () => _openLocationPicker(true),
+      borderRadius: BorderRadius.circular(12.0),
+      child: AbsorbPointer(
+        child: TextFormField(
           controller: _pickupLocationController,
-          textInputAction: TextInputAction.next,
-          decoration: InputDecoration(
+          readOnly: true,
+          decoration: const InputDecoration(
             labelText: 'Pickup Location',
-            hintText: 'Enter pickup location',
-            prefixIcon: const Icon(Icons.location_on_outlined),
-            suffixIcon: IconButton(
-              icon: const Icon(Icons.my_location),
-              onPressed: () => _setDummyLocation(true),
-              tooltip: 'Set dummy location (Mumbai)',
-            ),
+            hintText: 'Tap to search and select location',
+            prefixIcon: Icon(Icons.location_on_outlined),
+            suffixIcon: Icon(Icons.search),
           ),
-          onChanged: (_) => setState(() {}),
+          validator: (v) =>
+              _pickupLocation == null ? 'Please select pickup location' : null,
         ),
-        Padding(
-          padding: const EdgeInsets.only(top: 8.0),
-          child: Text(
-            'Dummy Location: $_dummyPickupLat, $_dummyPickupLng (Mumbai Port)',
-            style: textTheme.bodySmall?.copyWith(
-              color: AppColors.textSecondary,
-            ),
-          ),
-        ),
-      ],
+      ),
     );
   }
 
   Widget _buildDropLocationField(TextTheme textTheme) {
-    return Column(
-      crossAxisAlignment: CrossAxisAlignment.start,
-      children: [
-        TextFormField(
+    return InkWell(
+      onTap: () => _openLocationPicker(false),
+      borderRadius: BorderRadius.circular(12.0),
+      child: AbsorbPointer(
+        child: TextFormField(
           controller: _dropLocationController,
-          textInputAction: TextInputAction.next,
-          decoration: InputDecoration(
+          readOnly: true,
+          decoration: const InputDecoration(
             labelText: 'Drop Location',
-            hintText: 'Enter drop location',
-            prefixIcon: const Icon(Icons.location_on),
-            suffixIcon: IconButton(
-              icon: const Icon(Icons.my_location),
-              onPressed: () => _setDummyLocation(false),
-              tooltip: 'Set dummy location (Pune)',
-            ),
+            hintText: 'Tap to search and select location',
+            prefixIcon: Icon(Icons.location_on),
+            suffixIcon: Icon(Icons.search),
           ),
-          onChanged: (_) => setState(() {}),
+          validator: (v) =>
+              _dropLocation == null ? 'Please select drop location' : null,
         ),
-        Padding(
-          padding: const EdgeInsets.only(top: 8.0),
-          child: Text(
-            'Dummy Location: $_dummyDropLat, $_dummyDropLng (Pune Factory)',
-            style: textTheme.bodySmall?.copyWith(
-              color: AppColors.textSecondary,
-            ),
-          ),
-        ),
-      ],
+      ),
     );
   }
 
@@ -579,6 +545,7 @@ class _CreateTripScreenState extends State<CreateTripScreen> {
     return TextFormField(
       controller: _tripReferenceController,
       textInputAction: TextInputAction.done,
+      textCapitalization: TextCapitalization.characters,
       decoration: const InputDecoration(
         labelText: 'Trip Reference (Optional)',
         hintText: 'Enter trip reference',
@@ -627,15 +594,35 @@ class _CreateTripScreenState extends State<CreateTripScreen> {
   }
 }
 
-// Driver Picker Dialog
-class _DriverPickerDialog extends StatelessWidget {
+// Driver Picker Dialog with search
+class _DriverPickerDialog extends StatefulWidget {
   final List<DriverModel> drivers;
 
   const _DriverPickerDialog({required this.drivers});
 
   @override
+  State<_DriverPickerDialog> createState() => _DriverPickerDialogState();
+}
+
+class _DriverPickerDialogState extends State<_DriverPickerDialog> {
+  final _searchController = TextEditingController();
+  String _searchQuery = '';
+
+  @override
+  void dispose() {
+    _searchController.dispose();
+    super.dispose();
+  }
+
+  @override
   Widget build(BuildContext context) {
     final textTheme = Theme.of(context).textTheme;
+    final q = _searchQuery.toLowerCase();
+    final filtered = widget.drivers.where((d) {
+      final name = (d.name ?? '').toLowerCase();
+      final mobile = d.mobile.toLowerCase();
+      return name.contains(q) || mobile.contains(q);
+    }).toList();
 
     return Dialog(
       backgroundColor: AppColors.background,
@@ -666,47 +653,64 @@ class _DriverPickerDialog extends StatelessWidget {
                 ],
               ),
             ),
+            Padding(
+              padding: const EdgeInsets.fromLTRB(16.0, 0, 16.0, 8.0),
+              child: TextField(
+                controller: _searchController,
+                decoration: const InputDecoration(
+                  hintText: 'Search by driver name or mobile',
+                  prefixIcon: Icon(Icons.search),
+                  border: OutlineInputBorder(),
+                ),
+                onChanged: (v) => setState(() => _searchQuery = v),
+              ),
+            ),
             const Divider(height: 1),
             Flexible(
-              child: drivers.isEmpty
+              child: widget.drivers.isEmpty
                   ? const Padding(
                       padding: EdgeInsets.all(32.0),
                       child: Text('No drivers available'),
                     )
-                  : ListView.builder(
-                      shrinkWrap: true,
-                      itemCount: drivers.length,
-                      itemBuilder: (context, index) {
-                        final driver = drivers[index];
-                        return ListTile(
-                          leading: CircleAvatar(
-                            backgroundColor: AppColors.primary.withOpacity(0.1),
-                            child: Text(
-                              (driver.name?.isNotEmpty ?? false)
-                                  ? driver.name![0].toUpperCase()
-                                  : 'D',
-                              style: const TextStyle(
-                                color: AppColors.primary,
-                                fontWeight: FontWeight.bold,
+                  : filtered.isEmpty
+                      ? const Padding(
+                          padding: EdgeInsets.all(32.0),
+                          child: Text('No drivers match your search'),
+                        )
+                      : ListView.builder(
+                          shrinkWrap: true,
+                          itemCount: filtered.length,
+                          itemBuilder: (context, index) {
+                            final driver = filtered[index];
+                            return ListTile(
+                              leading: CircleAvatar(
+                                backgroundColor: AppColors.primary.withOpacity(0.1),
+                                child: Text(
+                                  (driver.name?.isNotEmpty ?? false)
+                                      ? driver.name![0].toUpperCase()
+                                      : 'D',
+                                  style: const TextStyle(
+                                    color: AppColors.primary,
+                                    fontWeight: FontWeight.bold,
+                                  ),
+                                ),
                               ),
-                            ),
-                          ),
-                          title: Text(
-                            driver.name ?? 'Driver',
-                            style: textTheme.bodyMedium?.copyWith(
-                              color: AppColors.textPrimary,
-                            ),
-                          ),
-                          subtitle: Text(
-                            driver.mobile,
-                            style: textTheme.bodySmall?.copyWith(
-                              color: AppColors.textSecondary,
-                            ),
-                          ),
-                          onTap: () => Navigator.of(context).pop(driver),
-                        );
-                      },
-                    ),
+                              title: Text(
+                                driver.name ?? 'Driver',
+                                style: textTheme.bodyMedium?.copyWith(
+                                  color: AppColors.textPrimary,
+                                ),
+                              ),
+                              subtitle: Text(
+                                driver.mobile,
+                                style: textTheme.bodySmall?.copyWith(
+                                  color: AppColors.textSecondary,
+                                ),
+                              ),
+                              onTap: () => Navigator.of(context).pop(driver),
+                            );
+                          },
+                        ),
             ),
           ],
         ),
@@ -715,15 +719,34 @@ class _DriverPickerDialog extends StatelessWidget {
   }
 }
 
-// Vehicle Picker Dialog
-class _VehiclePickerDialog extends StatelessWidget {
+// Vehicle Picker Dialog with search
+class _VehiclePickerDialog extends StatefulWidget {
   final List<VehicleModel> vehicles;
 
   const _VehiclePickerDialog({required this.vehicles});
 
   @override
+  State<_VehiclePickerDialog> createState() => _VehiclePickerDialogState();
+}
+
+class _VehiclePickerDialogState extends State<_VehiclePickerDialog> {
+  final _searchController = TextEditingController();
+  String _searchQuery = '';
+
+  @override
+  void dispose() {
+    _searchController.dispose();
+    super.dispose();
+  }
+
+  @override
   Widget build(BuildContext context) {
     final textTheme = Theme.of(context).textTheme;
+    final q = _searchQuery.toLowerCase();
+    final filtered = widget.vehicles.where((v) {
+      final num = v.vehicleNumber.toLowerCase();
+      return num.contains(q);
+    }).toList();
 
     return Dialog(
       backgroundColor: AppColors.background,
@@ -754,39 +777,56 @@ class _VehiclePickerDialog extends StatelessWidget {
                 ],
               ),
             ),
+            Padding(
+              padding: const EdgeInsets.fromLTRB(16.0, 0, 16.0, 8.0),
+              child: TextField(
+                controller: _searchController,
+                decoration: const InputDecoration(
+                  hintText: 'Search by vehicle number',
+                  prefixIcon: Icon(Icons.search),
+                  border: OutlineInputBorder(),
+                ),
+                onChanged: (v) => setState(() => _searchQuery = v),
+              ),
+            ),
             const Divider(height: 1),
             Flexible(
-              child: vehicles.isEmpty
+              child: widget.vehicles.isEmpty
                   ? const Padding(
                       padding: EdgeInsets.all(32.0),
                       child: Text('No vehicles available'),
                     )
-                  : ListView.builder(
-                      shrinkWrap: true,
-                      itemCount: vehicles.length,
-                      itemBuilder: (context, index) {
-                        final vehicle = vehicles[index];
-                        return ListTile(
-                          leading: const Icon(
-                            Icons.directions_car,
-                            color: AppColors.primary,
-                          ),
-                          title: Text(
-                            vehicle.vehicleNumber,
-                            style: textTheme.bodyMedium?.copyWith(
-                              color: AppColors.textPrimary,
-                            ),
-                          ),
-                          subtitle: Text(
-                            '${vehicle.ownerType}${vehicle.trailerType != null ? ' • ${vehicle.trailerType}' : ''}',
-                            style: textTheme.bodySmall?.copyWith(
-                              color: AppColors.textSecondary,
-                            ),
-                          ),
-                          onTap: () => Navigator.of(context).pop(vehicle),
-                        );
-                      },
-                    ),
+                  : filtered.isEmpty
+                      ? const Padding(
+                          padding: EdgeInsets.all(32.0),
+                          child: Text('No vehicles match your search'),
+                        )
+                      : ListView.builder(
+                          shrinkWrap: true,
+                          itemCount: filtered.length,
+                          itemBuilder: (context, index) {
+                            final vehicle = filtered[index];
+                            return ListTile(
+                              leading: const Icon(
+                                Icons.inventory_2,
+                                color: AppColors.primary,
+                              ),
+                              title: Text(
+                                vehicle.vehicleNumber,
+                                style: textTheme.bodyMedium?.copyWith(
+                                  color: AppColors.textPrimary,
+                                ),
+                              ),
+                              subtitle: Text(
+                                '${vehicle.ownerType}${vehicle.trailerType != null ? ' • ${vehicle.trailerType}' : ''}',
+                                style: textTheme.bodySmall?.copyWith(
+                                  color: AppColors.textSecondary,
+                                ),
+                              ),
+                              onTap: () => Navigator.of(context).pop(vehicle),
+                            );
+                          },
+                        ),
             ),
           ],
         ),

@@ -19,6 +19,10 @@ class Helpers {
   
   static String getStatusLabel(String status) {
     switch (status.toUpperCase()) {
+      case 'BOOKED':
+        return 'Booked';
+      case 'ACCEPTED':
+        return 'Accepted';
       case 'PLANNED':
         return 'Planned';
       case 'ACTIVE':

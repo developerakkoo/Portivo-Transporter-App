@@ -134,7 +134,7 @@ class _SearchVehicleScreenState extends State<SearchVehicleScreen> {
                 borderRadius: BorderRadius.circular(8.0),
               ),
               child: const Icon(
-                Icons.directions_car,
+                Icons.inventory_2,
                 color: AppColors.primary,
                 size: 24.0,
               ),

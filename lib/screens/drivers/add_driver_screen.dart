@@ -1,6 +1,7 @@
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:provider/provider.dart';
+import 'package:flutter_contacts/flutter_contacts.dart';
 import '../../core/theme/app_colors.dart';
 import '../../providers/driver_provider.dart';
 
@@ -24,6 +25,46 @@ class _AddDriverScreenState extends State<AddDriverScreen> {
     _nameController.dispose();
     _phoneController.dispose();
     super.dispose();
+  }
+
+  Future<void> _pickFromContacts() async {
+    try {
+      final hasPermission = await FlutterContacts.requestPermission(readonly: true);
+      if (!hasPermission) {
+        if (mounted) {
+          ScaffoldMessenger.of(context).showSnackBar(
+            const SnackBar(
+              content: Text('Contacts permission is required to pick from contacts'),
+              backgroundColor: Colors.orange,
+            ),
+          );
+        }
+        return;
+      }
+
+      final contact = await FlutterContacts.openExternalPick();
+      if (contact != null && mounted) {
+        setState(() {
+          _nameController.text = contact.displayName;
+          if (contact.phones.isNotEmpty) {
+            final phone = contact.phones.first.number;
+            final digitsOnly = phone.replaceAll(RegExp(r'[^0-9]'), '');
+            _phoneController.text = digitsOnly.length >= 10
+                ? digitsOnly.substring(digitsOnly.length - 10)
+                : digitsOnly;
+          }
+        });
+      }
+    } catch (e) {
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(
+            content: Text('Failed to pick contact: $e'),
+            backgroundColor: Colors.red,
+          ),
+        );
+      }
+    }
   }
 
   Future<void> _handleSave() async {
@@ -95,6 +136,18 @@ class _AddDriverScreenState extends State<AddDriverScreen> {
             child: Column(
               crossAxisAlignment: CrossAxisAlignment.stretch,
               children: [
+                // Pick from Contacts Button
+                OutlinedButton.icon(
+                  onPressed: _pickFromContacts,
+                  icon: const Icon(Icons.contacts_outlined),
+                  label: const Text('Pick from Contacts'),
+                  style: OutlinedButton.styleFrom(
+                    padding: const EdgeInsets.symmetric(vertical: 16.0),
+                    side: const BorderSide(color: AppColors.primary),
+                  ),
+                ),
+                const SizedBox(height: 24.0),
+
                 // Name Field
                 TextFormField(
                   controller: _nameController,

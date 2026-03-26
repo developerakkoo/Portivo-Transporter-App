@@ -97,7 +97,7 @@ class _DriversTabState extends State<DriversTab> {
             onRefresh: () => driverProvider.loadDrivers(refresh: true),
             child: drivers.isEmpty
                 ? _buildEmptyState(Theme.of(context).textTheme)
-                : _buildDriversList(drivers, Theme.of(context).textTheme),
+                : _buildDriversList(drivers, Theme.of(context).textTheme, driverProvider),
           ),
           floatingActionButton: Consumer<AuthProvider>(
             builder: (context, authProvider, child) {
@@ -124,13 +124,13 @@ class _DriversTabState extends State<DriversTab> {
     );
   }
 
-  Widget _buildDriversList(List<DriverModel> drivers, TextTheme textTheme) {
+  Widget _buildDriversList(List<DriverModel> drivers, TextTheme textTheme, DriverProvider driverProvider) {
     return ListView.builder(
       padding: const EdgeInsets.all(16.0),
       itemCount: drivers.length,
       itemBuilder: (context, index) {
         final driver = drivers[index];
-        return _buildDriverCard(driver, textTheme);
+        return _buildDriverCard(driver, textTheme, driverProvider);
       },
     );
   }
@@ -169,7 +169,45 @@ class _DriversTabState extends State<DriversTab> {
     );
   }
 
-  Widget _buildDriverCard(DriverModel driver, TextTheme textTheme) {
+  Future<void> _onAccessToggleChanged(DriverModel driver, bool granted, DriverProvider driverProvider) async {
+    if (driver.status == 'active' && !granted) {
+      final confirmed = await showDialog<bool>(
+        context: context,
+        builder: (context) => AlertDialog(
+          title: const Text('Block Driver'),
+          content: Text('Block ${driver.name ?? 'this driver'}? They will not be able to log in.'),
+          actions: [
+            TextButton(
+              onPressed: () => Navigator.of(context).pop(false),
+              child: const Text('Cancel'),
+            ),
+            TextButton(
+              onPressed: () => Navigator.of(context).pop(true),
+              child: const Text('Block', style: TextStyle(color: AppColors.error)),
+            ),
+          ],
+        ),
+      );
+      if (confirmed != true || !mounted) return;
+    }
+
+    final newStatus = granted ? 'active' : 'blocked';
+    final updated = await driverProvider.updateDriver(id: driver.id, status: newStatus);
+    if (!mounted) return;
+    ScaffoldMessenger.of(context).showSnackBar(
+      SnackBar(
+        content: Text(updated != null
+            ? (granted ? 'Access granted to ${driver.name ?? 'driver'}' : '${driver.name ?? 'Driver'} has been blocked')
+            : driverProvider.error ?? 'Failed to update driver'),
+        backgroundColor: updated != null ? AppColors.success : AppColors.error,
+      ),
+    );
+  }
+
+  Widget _buildDriverCard(DriverModel driver, TextTheme textTheme, DriverProvider driverProvider) {
+    final isAccessGranted = driver.status.toLowerCase() == 'active';
+    final isBlocked = driver.status.toLowerCase() == 'blocked';
+
     return Card(
       margin: const EdgeInsets.only(bottom: 12.0),
       elevation: 0,
@@ -180,48 +218,93 @@ class _DriversTabState extends State<DriversTab> {
           width: 1.0,
         ),
       ),
-      child: ListTile(
-        contentPadding: const EdgeInsets.symmetric(
-          horizontal: 16.0,
-          vertical: 12.0,
-        ),
-        leading: CircleAvatar(
-          backgroundColor: AppColors.offWhite,
-          child: Text(
-            (driver.name?.isNotEmpty == true) ? driver.name![0].toUpperCase() : 'D',
-            style: textTheme.titleMedium?.copyWith(
-              color: AppColors.primary,
-              fontWeight: FontWeight.bold,
-            ),
-          ),
-        ),
-        title: Text(
-          driver.name ?? 'Driver',
-          style: textTheme.titleMedium?.copyWith(
-            fontWeight: FontWeight.w600,
-            color: AppColors.textPrimary,
-          ),
-        ),
-        subtitle: Padding(
-          padding: const EdgeInsets.only(top: 4.0),
-          child: Text(
-            driver.mobile,
-            style: textTheme.bodyMedium?.copyWith(
-              color: AppColors.textSecondary,
-            ),
-          ),
-        ),
-        trailing: Row(
-          mainAxisSize: MainAxisSize.min,
+      child: Padding(
+        padding: const EdgeInsets.symmetric(horizontal: 16.0, vertical: 12.0),
+        child: Row(
+          crossAxisAlignment: CrossAxisAlignment.start,
           children: [
-            _buildStatusChip(driver.status),
-            const SizedBox(width: 8.0),
+            CircleAvatar(
+              backgroundColor: AppColors.offWhite,
+              child: Text(
+                (driver.name?.isNotEmpty == true) ? driver.name![0].toUpperCase() : 'D',
+                style: textTheme.titleMedium?.copyWith(
+                  color: AppColors.primary,
+                  fontWeight: FontWeight.bold,
+                ),
+              ),
+            ),
+            const SizedBox(width: 12.0),
+            Expanded(
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  Row(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      Expanded(
+                        child: Text(
+                          driver.name ?? 'Driver',
+                          maxLines: 1,
+                          overflow: TextOverflow.ellipsis,
+                          style: textTheme.titleMedium?.copyWith(
+                            fontWeight: FontWeight.w600,
+                            color: AppColors.textPrimary,
+                          ),
+                        ),
+                      ),
+                      if (isBlocked)
+                        Container(
+                          padding: const EdgeInsets.symmetric(horizontal: 8.0, vertical: 2.0),
+                          decoration: BoxDecoration(
+                            color: AppColors.error.withOpacity(0.12),
+                            borderRadius: BorderRadius.circular(8.0),
+                          ),
+                          child: Text(
+                            'Blocked',
+                            style: textTheme.labelSmall?.copyWith(
+                              color: AppColors.error,
+                              fontWeight: FontWeight.w600,
+                            ),
+                          ),
+                        ),
+                    ],
+                  ),
+                  const SizedBox(height: 6.0),
+                  Text(
+                    driver.mobile,
+                    style: textTheme.bodyMedium?.copyWith(
+                      color: AppColors.textSecondary,
+                    ),
+                  ),
+                  const SizedBox(height: 12.0),
+                  Row(
+                    children: [
+                      Text(
+                        'Access',
+                        style: textTheme.bodySmall?.copyWith(
+                          color: AppColors.textSecondary,
+                          fontWeight: FontWeight.w500,
+                        ),
+                      ),
+                      const SizedBox(width: 8.0),
+                      Semantics(
+                        label: isAccessGranted ? 'Access granted' : 'Access blocked',
+                        child: Switch(
+                          value: isAccessGranted,
+                          onChanged: driverProvider.isLoading
+                              ? null
+                              : (granted) => _onAccessToggleChanged(driver, granted, driverProvider),
+                        ),
+                      ),
+                    ],
+                  ),
+                ],
+              ),
+            ),
             PopupMenuButton<String>(
               icon: const Icon(Icons.more_vert),
               onSelected: (value) async {
-                final driverProvider = context.read<DriverProvider>();
                 if (value == 'edit') {
-                  // TODO: Navigate to edit driver screen
                   ScaffoldMessenger.of(context).showSnackBar(
                     const SnackBar(content: Text('Edit driver feature coming soon')),
                   );
@@ -263,52 +346,6 @@ class _DriversTabState extends State<DriversTab> {
             ),
           ],
         ),
-      ),
-    );
-  }
-
-  Widget _buildStatusChip(String status) {
-    Color chipColor;
-    String label;
-    
-    switch (status.toLowerCase()) {
-      case 'active':
-        chipColor = AppColors.success;
-        label = 'Active';
-        break;
-      case 'inactive':
-        chipColor = AppColors.warning;
-        label = 'Inactive';
-        break;
-      case 'pending':
-        chipColor = AppColors.info;
-        label = 'Pending';
-        break;
-      case 'blocked':
-        chipColor = AppColors.error;
-        label = 'Blocked';
-        break;
-      default:
-        chipColor = AppColors.textMuted;
-        label = status;
-    }
-
-    return Container(
-      padding: const EdgeInsets.symmetric(horizontal: 12.0, vertical: 6.0),
-      decoration: BoxDecoration(
-        color: chipColor.withOpacity(0.1),
-        borderRadius: BorderRadius.circular(16.0),
-        border: Border.all(
-          color: chipColor.withOpacity(0.3),
-          width: 1.0,
-        ),
-      ),
-      child: Text(
-        label,
-        style: Theme.of(context).textTheme.bodySmall?.copyWith(
-              color: chipColor,
-              fontWeight: FontWeight.w600,
-            ),
       ),
     );
   }

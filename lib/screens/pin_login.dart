@@ -1,8 +1,8 @@
 import 'package:flutter/material.dart';
-import 'package:flutter/services.dart';
 import 'package:provider/provider.dart';
 import '../core/theme/app_colors.dart';
 import '../providers/auth_provider.dart';
+import '../widgets/pin_digit_field.dart';
 
 class PinLoginScreen extends StatefulWidget {
   const PinLoginScreen({super.key});
@@ -317,67 +317,55 @@ class _PinLoginScreenState extends State<PinLoginScreen> {
     final isFocused = focusNode.hasFocus;
     final hasValue = controller.text.isNotEmpty;
 
-    return SizedBox(
-      width: 70.0,
-      height: 70.0,
-      child: TextFormField(
-        controller: controller,
-        focusNode: focusNode,
-        textAlign: TextAlign.center,
-        keyboardType: TextInputType.number,
-        maxLength: 1,
-        inputFormatters: [
-          FilteringTextInputFormatter.digitsOnly,
-        ],
-        style: Theme.of(context).textTheme.headlineMedium?.copyWith(
-              color: AppColors.textPrimary,
-              fontWeight: FontWeight.w600,
-            ),
-        decoration: InputDecoration(
-          counterText: '',
-          filled: true,
-          fillColor: hasValue || isFocused
-              ? AppColors.background
-              : AppColors.offWhite,
-          contentPadding: EdgeInsets.zero,
-          border: OutlineInputBorder(
-            borderRadius: BorderRadius.circular(16.0),
-            borderSide: BorderSide(
-              color: isFocused
-                  ? AppColors.primary
-                  : AppColors.dividerGrey,
-              width: isFocused ? 2.0 : 1.0,
-            ),
+    return PinDigitField(
+      index: index,
+      controller: controller,
+      focusNode: focusNode,
+      controllers: _pinControllers,
+      focusNodes: _pinFocusNodes,
+      onChanged: (value) {
+        setState(() {});
+        _handlePinInput(value, index);
+      },
+      onStateChanged: () => setState(() {}),
+      style: Theme.of(context).textTheme.headlineMedium?.copyWith(
+            color: AppColors.textPrimary,
+            fontWeight: FontWeight.w600,
           ),
-          enabledBorder: OutlineInputBorder(
-            borderRadius: BorderRadius.circular(16.0),
-            borderSide: BorderSide(
-              color: isFocused
-                  ? AppColors.primary
-                  : AppColors.dividerGrey,
-              width: isFocused ? 2.0 : 1.0,
-            ),
-          ),
-          focusedBorder: OutlineInputBorder(
-            borderRadius: BorderRadius.circular(16.0),
-            borderSide: const BorderSide(
-              color: AppColors.primary,
-              width: 2.0,
-            ),
+      decoration: InputDecoration(
+        counterText: '',
+        filled: true,
+        fillColor: hasValue || isFocused
+            ? AppColors.background
+            : AppColors.offWhite,
+        contentPadding: EdgeInsets.zero,
+        border: OutlineInputBorder(
+          borderRadius: BorderRadius.circular(16.0),
+          borderSide: BorderSide(
+            color: isFocused
+                ? AppColors.primary
+                : AppColors.dividerGrey,
+            width: isFocused ? 2.0 : 1.0,
           ),
         ),
-        onChanged: (value) {
-          setState(() {});
-          _handlePinInput(value, index);
-        },
-        onTap: () {
-          setState(() {});
-        },
-        onFieldSubmitted: (_) {
-          _handleLogin();
-        },
-        buildCounter: (context, {required currentLength, required isFocused, maxLength}) => null,
+        enabledBorder: OutlineInputBorder(
+          borderRadius: BorderRadius.circular(16.0),
+          borderSide: BorderSide(
+            color: isFocused
+                ? AppColors.primary
+                : AppColors.dividerGrey,
+            width: isFocused ? 2.0 : 1.0,
+          ),
+        ),
+        focusedBorder: OutlineInputBorder(
+          borderRadius: BorderRadius.circular(16.0),
+          borderSide: const BorderSide(
+            color: AppColors.primary,
+            width: 2.0,
+          ),
+        ),
       ),
+      onFieldSubmitted: (_) => _handleLogin(),
     );
   }
 

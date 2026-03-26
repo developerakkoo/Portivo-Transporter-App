@@ -5,12 +5,26 @@ class AppConstants {
   static const String userDataKey = 'user_data';
   static const String transporterIdKey = 'transporter_id';
   
-  // Trip Status
+  // Trip Status (aligned with backend TRIP_STATUS)
+  static const String tripStatusBooked = 'BOOKED';
+  static const String tripStatusAccepted = 'ACCEPTED';
   static const String tripStatusPlanned = 'PLANNED';
   static const String tripStatusActive = 'ACTIVE';
   static const String tripStatusCompleted = 'COMPLETED';
   static const String tripStatusPodPending = 'POD_PENDING';
+  static const String tripStatusClosedWithPOD = 'CLOSED_WITH_POD';
+  static const String tripStatusClosedWithoutPOD = 'CLOSED_WITHOUT_POD';
   static const String tripStatusCancelled = 'CANCELLED';
+
+  /// Trips tab key: marketplace list (customer offers), not the same as DB status [tripStatusBooked]
+  static const String tripTabMarketplace = 'TRIP_TAB_MARKETPLACE';
+
+  /// Statuses that belong in the Completed tab (backend uses CLOSED_WITH_POD, not COMPLETED)
+  static const List<String> tripStatusesCompleted = [
+    tripStatusCompleted,
+    tripStatusClosedWithPOD,
+    tripStatusClosedWithoutPOD,
+  ];
   
   // Trip Types
   static const String tripTypeImport = 'IMPORT';

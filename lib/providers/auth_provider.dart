@@ -1,6 +1,7 @@
 import 'package:flutter/foundation.dart';
 import '../data/models/auth_response_model.dart';
 import '../services/auth_service.dart';
+import '../services/company_user_service.dart';
 import '../services/socket_service.dart';
 import '../services/transporter_service.dart';
 import '../utils/error_utils.dart';
@@ -26,18 +27,21 @@ class AuthProvider with ChangeNotifier {
     try {
       final token = await _authService.getAccessToken();
       if (token != null) {
-        _isAuthenticated = true;
         if (kDebugMode) {
-          print('AuthProvider: Found existing token, user is authenticated');
+          print('AuthProvider: Found existing token, loading session');
         }
-        // Reload user data from profile endpoint
         await _reloadUserFromProfile();
-        // Don't connect Socket.IO here - wait for successful login
-        // Socket.IO will be connected after login
+        if (_user != null) {
+          _isAuthenticated = true;
+          await _connectSocketForCurrentUser();
+        } else {
+          await _clearInvalidSession();
+        }
       } else {
         if (kDebugMode) {
           print('AuthProvider: No existing token found');
         }
+        _isAuthenticated = false;
       }
     } catch (e, stackTrace) {
       if (kDebugMode) {
@@ -45,26 +49,46 @@ class AuthProvider with ChangeNotifier {
         print('Stack: $stackTrace');
       }
       _error = e.toString();
+      await _clearInvalidSession();
     } finally {
       _isLoading = false;
       notifyListeners();
     }
   }
 
-  /// Reload user data from profile endpoint
-  /// This is used when app restarts and we have a token but no user data
+  Future<void> _clearInvalidSession() async {
+    _user = null;
+    _isAuthenticated = false;
+    try {
+      await _authService.logout();
+    } catch (_) {}
+  }
+
+  Future<void> _connectSocketForCurrentUser() async {
+    final u = _user;
+    if (u == null) return;
+    try {
+      await _socketService.connect();
+      final transporterId = u.transporterId ?? u.id;
+      _socketService.joinTransporterRoom(transporterId);
+      if (kDebugMode) {
+        print('AuthProvider: Socket connected, joined transporter room: $transporterId');
+      }
+    } catch (e) {
+      if (kDebugMode) {
+        print('AuthProvider: Socket.IO connection failed (non-critical): $e');
+      }
+    }
+  }
+
+  /// Reload user from transporter profile, or company-user profile when JWT is a company user.
   Future<void> _reloadUserFromProfile() async {
+    final transporterService = TransporterService();
     try {
       if (kDebugMode) {
-        print('AuthProvider: Attempting to reload user from profile');
+        print('AuthProvider: Attempting transporter profile');
       }
-      
-      // Import transporter service to get profile
-      final transporterService = TransporterService();
       final transporter = await transporterService.getProfile();
-      
-      // Create UserModel from transporter profile
-      // Assume userType is 'transporter' since we're calling transporter profile
       _user = UserModel(
         id: transporter.id,
         mobile: transporter.mobile,
@@ -73,20 +97,51 @@ class AuthProvider with ChangeNotifier {
         status: transporter.status,
         hasAccess: transporter.hasAccess,
       );
-      
       if (kDebugMode) {
-        print('AuthProvider: User reloaded from profile - ID: ${_user!.id}, userType: ${_user!.userType}');
+        print('AuthProvider: User from transporter profile — ${_user!.id}');
       }
-      
       notifyListeners();
+      return;
     } catch (e, stackTrace) {
       if (kDebugMode) {
-        print('AuthProvider: Error reloading user from profile: $e');
+        print('AuthProvider: Transporter profile failed: $e');
         print('Stack: $stackTrace');
-        print('AuthProvider: User will remain null, may need to login again');
       }
-      // Don't set error here - user might just need to login again
-      // This is not critical for app initialization
+    }
+
+    final storedUserId = await _authService.getStoredUserId();
+    if (storedUserId != null && storedUserId.isNotEmpty) {
+      try {
+        final companyUserService = CompanyUserService();
+        final cu = await companyUserService.getUserById(storedUserId);
+        if (cu != null) {
+          _user = UserModel(
+            id: cu.id,
+            mobile: cu.mobile,
+            name: cu.name,
+            userType: 'company-user',
+            status: cu.status,
+            hasAccess: cu.hasAccess,
+            transporterId: cu.transporterId,
+            permissions: cu.permissions,
+          );
+          if (kDebugMode) {
+            print('AuthProvider: User from company profile — ${_user!.id}');
+          }
+          notifyListeners();
+          return;
+        }
+      } catch (e, stackTrace) {
+        if (kDebugMode) {
+          print('AuthProvider: Company user profile failed: $e');
+          print('Stack: $stackTrace');
+        }
+      }
+    }
+
+    _user = null;
+    if (kDebugMode) {
+      print('AuthProvider: Could not restore user; session cleared');
     }
   }
 
@@ -155,23 +210,9 @@ class AuthProvider with ChangeNotifier {
         if (kDebugMode) {
           print('AuthProvider: Login successful for user: ${_user!.id}');
         }
-        
-        // Connect Socket.IO after successful login
-        try {
-          await _socketService.connect();
-          // For company users, use transporterId for Socket.IO room
-          final transporterId = _user!.transporterId ?? _user!.id;
-          _socketService.joinTransporterRoom(transporterId);
-          if (kDebugMode) {
-            print('AuthProvider: Socket.IO connected and joined transporter room: $transporterId');
-          }
-        } catch (e) {
-          if (kDebugMode) {
-            print('AuthProvider: Socket.IO connection failed (non-critical): $e');
-          }
-          // Don't fail login if Socket.IO fails
-        }
-        
+
+        await _connectSocketForCurrentUser();
+
         notifyListeners();
         return true;
       } else {
@@ -218,23 +259,9 @@ class AuthProvider with ChangeNotifier {
         if (kDebugMode) {
           print('AuthProvider: PIN login successful for user: ${_user!.id}');
         }
-        
-        // Connect Socket.IO after successful login
-        try {
-          await _socketService.connect();
-          // For company users, use transporterId for Socket.IO room
-          final transporterId = _user!.transporterId ?? _user!.id;
-          _socketService.joinTransporterRoom(transporterId);
-          if (kDebugMode) {
-            print('AuthProvider: Socket.IO connected and joined transporter room: $transporterId');
-          }
-        } catch (e) {
-          if (kDebugMode) {
-            print('AuthProvider: Socket.IO connection failed (non-critical): $e');
-          }
-          // Don't fail login if Socket.IO fails
-        }
-        
+
+        await _connectSocketForCurrentUser();
+
         notifyListeners();
         return true;
       } else {
@@ -281,23 +308,9 @@ class AuthProvider with ChangeNotifier {
           print('AuthProvider: User permissions: ${_user!.permissions}');
           print('AuthProvider: Transporter ID: ${_user!.transporterId}');
         }
-        
-        // Connect Socket.IO after successful login
-        // Use transporterId for Socket.IO room (company users receive updates for their transporter)
-        try {
-          await _socketService.connect();
-          final transporterId = _user!.transporterId ?? _user!.id;
-          _socketService.joinTransporterRoom(transporterId);
-          if (kDebugMode) {
-            print('AuthProvider: Socket.IO connected and joined transporter room: $transporterId');
-          }
-        } catch (e) {
-          if (kDebugMode) {
-            print('AuthProvider: Socket.IO connection failed (non-critical): $e');
-          }
-          // Don't fail login if Socket.IO fails
-        }
-        
+
+        await _connectSocketForCurrentUser();
+
         notifyListeners();
         return true;
       } else {
@@ -331,6 +344,7 @@ class AuthProvider with ChangeNotifier {
         print('AuthProvider: Logging out');
       }
       await _authService.logout();
+      _socketService.clearJoinedRooms();
       _socketService.disconnect();
       _user = null;
       _isAuthenticated = false;

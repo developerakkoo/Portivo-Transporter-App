@@ -162,7 +162,7 @@ class _VehiclesListScreenState extends State<VehiclesListScreen> {
                             mainAxisAlignment: MainAxisAlignment.center,
                             children: [
                               Icon(
-                                Icons.directions_car_outlined,
+                                Icons.inventory_2_outlined,
                                 size: 64.0,
                                 color: AppColors.textMuted,
                               ),
@@ -238,7 +238,7 @@ class _VehiclesListScreenState extends State<VehiclesListScreen> {
                       borderRadius: BorderRadius.circular(8.0),
                     ),
                     child: const Icon(
-                      Icons.directions_car,
+                      Icons.inventory_2,
                       color: AppColors.primary,
                       size: 24.0,
                     ),

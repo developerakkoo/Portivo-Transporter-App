@@ -2,9 +2,11 @@ import 'package:flutter/material.dart';
 import 'package:provider/provider.dart';
 import '../../core/theme/app_colors.dart';
 import '../../core/constants/app_constants.dart';
-import '../../core/utils/helpers.dart';
 import '../../data/models/trip_model.dart';
 import '../../providers/trip_provider.dart';
+import '../../providers/pinned_trips_provider.dart';
+import '../../providers/navigation_state_provider.dart';
+import '../../widgets/trip_expansion_card.dart';
 import '../../providers/auth_provider.dart';
 import '../../services/socket_service.dart';
 import '../../services/permission_service.dart';
@@ -23,12 +25,13 @@ class _TripsTabState extends State<TripsTab>
   final TextEditingController _searchController = TextEditingController();
   final SocketService _socketService = SocketService();
   bool _hasInitialized = false;
+  String? _lastHighlightTripIdScheduled;
   
   @override
   void initState() {
     super.initState();
     WidgetsBinding.instance.addObserver(this);
-    _tabController = TabController(length: 3, vsync: this);
+    _tabController = TabController(length: 4, vsync: this);
     _tabController.addListener(_onTabChanged);
     _searchController.addListener(() {
       setState(() {});
@@ -72,10 +75,14 @@ class _TripsTabState extends State<TripsTab>
 
     // Ensure Socket.IO is connected
     await _ensureSocketConnection();
+    if (!mounted) return;
 
-    // Load trips
+    // Load trips and pinned IDs
     final tripProvider = Provider.of<TripProvider>(context, listen: false);
-    await tripProvider.loadTrips(refresh: true);
+    final pinnedProvider = Provider.of<PinnedTripsProvider>(context, listen: false);
+    await tripProvider.bootstrapTripsIfNeeded();
+    await pinnedProvider.load();
+    await pinnedProvider.reconcileWithTripProvider(tripProvider);
   }
 
   Future<void> _ensureSocketConnection() async {
@@ -88,12 +95,16 @@ class _TripsTabState extends State<TripsTab>
         await _socketService.connect();
       }
 
+      if (!mounted) return;
+
       // Ensure transporter room is joined
       final authProvider = Provider.of<AuthProvider>(context, listen: false);
       if (authProvider.user != null) {
-        _socketService.joinTransporterRoom(authProvider.user!.id);
+        final u = authProvider.user!;
+        final roomId = u.transporterId ?? u.id;
+        _socketService.joinTransporterRoom(roomId);
         if (kDebugMode) {
-          print('TripsTab: Joined transporter room: ${authProvider.user!.id}');
+          print('TripsTab: Joined transporter room: $roomId');
         }
       }
     } catch (e) {
@@ -106,8 +117,7 @@ class _TripsTabState extends State<TripsTab>
 
 
   Future<void> _refreshTrips() async {
-    final tripProvider = Provider.of<TripProvider>(context, listen: false);
-    await tripProvider.loadTrips(refresh: true);
+    await _onPullRefreshTrips();
   }
 
   List<TripModel> _getFilteredTrips(List<TripModel> trips) {
@@ -119,6 +129,23 @@ class _TripsTabState extends State<TripsTab>
       final reference = (trip.reference ?? '').toLowerCase();
       return containerId.contains(searchQuery) || reference.contains(searchQuery);
     }).toList();
+  }
+
+  List<TripModel> _mergeTripsUniqueById(List<TripModel> items) {
+    final seen = <String>{};
+    final out = <TripModel>[];
+    for (final t in items) {
+      if (seen.add(t.id)) out.add(t);
+    }
+    return out;
+  }
+
+  Future<void> _onPullRefreshTrips() async {
+    final tripProvider = Provider.of<TripProvider>(context, listen: false);
+    final pinnedProvider = Provider.of<PinnedTripsProvider>(context, listen: false);
+    await tripProvider.bootstrapTripsIfNeeded();
+    if (!mounted) return;
+    await pinnedProvider.reconcileWithTripProvider(tripProvider);
   }
 
   @override
@@ -167,14 +194,33 @@ class _TripsTabState extends State<TripsTab>
             Tab(text: 'Active'),
             Tab(text: 'Completed'),
             Tab(text: 'POD Pending'),
+            Tab(text: 'Available'),
           ],
           onTap: (index) => setState(() {}),
         ),
       ),
-      body: SafeArea(
-        child: Column(
-          children: [
-            // Search Bar
+      body: Consumer<NavigationStateProvider>(
+        builder: (context, navState, _) {
+          if (navState.pendingHighlightTripId != null &&
+              _lastHighlightTripIdScheduled != navState.pendingHighlightTripId) {
+            _lastHighlightTripIdScheduled = navState.pendingHighlightTripId;
+            WidgetsBinding.instance.addPostFrameCallback((_) async {
+              if (!mounted) return;
+              final tripProvider = Provider.of<TripProvider>(context, listen: false);
+              await tripProvider.loadAvailableTrips(refresh: true);
+              if (!mounted) return;
+              _tabController.animateTo(
+                navState.pendingTripsSubTabIndex ?? 3,
+              );
+              _scheduleClearHighlight(navState);
+            });
+          } else if (navState.pendingHighlightTripId == null) {
+            _lastHighlightTripIdScheduled = null;
+          }
+          return SafeArea(
+            child: Column(
+              children: [
+                // Search Bar
             Padding(
               padding: const EdgeInsets.all(24.0),
               child: TextField(
@@ -203,23 +249,33 @@ class _TripsTabState extends State<TripsTab>
                   }
 
                   if (tripProvider.error != null && tripProvider.trips.isEmpty) {
-                    return Center(
-                      child: Column(
-                        mainAxisAlignment: MainAxisAlignment.center,
-                        children: [
-                          Text(
-                            tripProvider.error!,
-                            style: textTheme.bodyMedium?.copyWith(
-                              color: AppColors.error,
+                    return RefreshIndicator(
+                      onRefresh: _onPullRefreshTrips,
+                      child: CustomScrollView(
+                        physics: const AlwaysScrollableScrollPhysics(),
+                        slivers: [
+                          SliverFillRemaining(
+                            hasScrollBody: false,
+                            child: Column(
+                              mainAxisAlignment: MainAxisAlignment.center,
+                              children: [
+                                Text(
+                                  tripProvider.error!,
+                                  style: textTheme.bodyMedium?.copyWith(
+                                    color: AppColors.error,
+                                  ),
+                                  textAlign: TextAlign.center,
+                                ),
+                                const SizedBox(height: 16.0),
+                                ElevatedButton(
+                                  onPressed: () {
+                                    tripProvider.clearError();
+                                    _onPullRefreshTrips();
+                                  },
+                                  child: const Text('Retry'),
+                                ),
+                              ],
                             ),
-                          ),
-                          const SizedBox(height: 16.0),
-                          ElevatedButton(
-                            onPressed: () {
-                              tripProvider.clearError();
-                              tripProvider.loadTrips(refresh: true);
-                            },
-                            child: const Text('Retry'),
                           ),
                         ],
                       ),
@@ -229,9 +285,10 @@ class _TripsTabState extends State<TripsTab>
                   return TabBarView(
                     controller: _tabController,
                     children: [
-                      _buildTripsList(AppConstants.tripStatusActive, textTheme),
-                      _buildTripsList(AppConstants.tripStatusCompleted, textTheme),
-                      _buildTripsList(AppConstants.tripStatusPodPending, textTheme),
+                      _buildTripsList(AppConstants.tripStatusActive, textTheme, highlightTripId: navState.pendingHighlightTripId),
+                      _buildTripsList(AppConstants.tripStatusCompleted, textTheme, highlightTripId: navState.pendingHighlightTripId),
+                      _buildTripsList(AppConstants.tripStatusPodPending, textTheme, highlightTripId: navState.pendingHighlightTripId),
+                      _buildTripsList(AppConstants.tripTabMarketplace, textTheme, highlightTripId: navState.pendingHighlightTripId),
                     ],
                   );
                 },
@@ -239,121 +296,84 @@ class _TripsTabState extends State<TripsTab>
             ),
           ],
         ),
+      );
+        },
       ),
     );
   }
 
-  Widget _buildTripsList(String status, TextTheme textTheme) {
+  Widget _buildTripsList(String status, TextTheme textTheme, {String? highlightTripId}) {
     return Consumer<TripProvider>(
       builder: (context, tripProvider, child) {
         List<TripModel> trips;
+        final bool showAcceptButton;
         switch (status) {
           case AppConstants.tripStatusActive:
-            // Show both ACTIVE and PLANNED trips in Active tab
-            // (planned trips are queued for activation)
-            trips = [
+            // ACTIVE, PLANNED, ACCEPTED, and BOOKED (from main list — e.g. customer bookings)
+            trips = _mergeTripsUniqueById([
               ...tripProvider.activeTrips,
               ...tripProvider.plannedTrips,
-            ];
+              ...tripProvider.acceptedTrips,
+              ...tripProvider.bookedTrips,
+            ]);
+            showAcceptButton = false;
             break;
           case AppConstants.tripStatusCompleted:
             trips = tripProvider.completedTrips;
+            showAcceptButton = false;
             break;
           case AppConstants.tripStatusPodPending:
             trips = tripProvider.podPendingTrips;
+            showAcceptButton = false;
+            break;
+          case AppConstants.tripTabMarketplace:
+            trips = tripProvider.availableTrips;
+            showAcceptButton = true;
             break;
           default:
             trips = [];
+            showAcceptButton = false;
         }
 
         final filteredTrips = _getFilteredTrips(trips);
+        final isMarketplace = status == AppConstants.tripTabMarketplace;
 
         if (filteredTrips.isEmpty) {
-          return Center(
-            child: Column(
-              mainAxisAlignment: MainAxisAlignment.center,
-              children: [
-                Icon(
-                  Icons.local_shipping_outlined,
-                  size: 64.0,
-                  color: AppColors.textMuted,
-                ),
-                const SizedBox(height: 24.0),
-                Text(
-                  'No trips found',
-                  style: textTheme.bodyMedium?.copyWith(
-                    color: AppColors.textSecondary,
-                  ),
-                ),
-              ],
-            ),
-          );
-        }
-
-        return RefreshIndicator(
-          onRefresh: () async {
-            await tripProvider.loadTrips(refresh: true);
-          },
-          child: ListView.builder(
-            padding: const EdgeInsets.symmetric(horizontal: 24.0),
-            itemCount: filteredTrips.length,
-            itemBuilder: (context, index) {
-              final trip = filteredTrips[index];
-              return _buildTripCard(trip, textTheme, index);
-            },
-          ),
-        );
-      },
-    );
-  }
-
-  Widget _buildTripCard(
-    TripModel trip,
-    TextTheme textTheme,
-    int index,
-  ) {
-
-    return Container(
-      key: Key('trip_${trip.id}'),
-      margin: const EdgeInsets.only(bottom: 16.0),
-      padding: const EdgeInsets.all(20.0),
-      decoration: BoxDecoration(
-        color: AppColors.background,
-        borderRadius: BorderRadius.circular(16.0),
-        border: Border.all(
-          color: AppColors.dividerGrey,
-          width: 1.0,
-        ),
-      ),
-      child: InkWell(
-        onTap: () {
-          Navigator.of(context).pushNamed('/trip-detail', arguments: trip.id);
-        },
-        child: Column(
-          crossAxisAlignment: CrossAxisAlignment.start,
-          children: [
-            // Container ID and Trip ID
-            Row(
-              mainAxisAlignment: MainAxisAlignment.spaceBetween,
-              children: [
-                Expanded(
+          return RefreshIndicator(
+            onRefresh: _onPullRefreshTrips,
+            child: CustomScrollView(
+              physics: const AlwaysScrollableScrollPhysics(),
+              slivers: [
+                SliverFillRemaining(
+                  hasScrollBody: false,
                   child: Column(
-                    crossAxisAlignment: CrossAxisAlignment.start,
+                    mainAxisAlignment: MainAxisAlignment.center,
                     children: [
-                      if (trip.containerNumber != null)
-                        Text(
-                          trip.containerNumber!,
-                          style: textTheme.titleLarge?.copyWith(
-                            fontWeight: FontWeight.bold,
-                            color: AppColors.primary,
-                          ),
+                      Icon(
+                        Icons.inventory_2_outlined,
+                        size: 64.0,
+                        color: AppColors.textMuted,
+                      ),
+                      const SizedBox(height: 24.0),
+                      Text(
+                        isMarketplace
+                            ? 'No customer offers for now'
+                            : 'No trips found',
+                        style: textTheme.bodyMedium?.copyWith(
+                          color: AppColors.textSecondary,
                         ),
-                      if (trip.tripId.isNotEmpty) ...[
-                        const SizedBox(height: 4.0),
-                        Text(
-                          trip.tripId,
-                          style: textTheme.bodySmall?.copyWith(
-                            color: AppColors.textSecondary,
+                        textAlign: TextAlign.center,
+                      ),
+                      if (isMarketplace) ...[
+                        const SizedBox(height: 8.0),
+                        Padding(
+                          padding: const EdgeInsets.symmetric(horizontal: 32.0),
+                          child: Text(
+                            'Open trips from customers that your transporter can accept appear here.',
+                            style: textTheme.bodySmall?.copyWith(
+                              color: AppColors.textMuted,
+                            ),
+                            textAlign: TextAlign.center,
                           ),
                         ),
                       ],
@@ -362,166 +382,109 @@ class _TripsTabState extends State<TripsTab>
                 ),
               ],
             ),
+          );
+        }
 
-            // Trip Reference (if available)
-            if (trip.reference != null) ...[
-              const SizedBox(height: 4.0),
-              Text(
-                trip.reference!,
-                style: textTheme.bodySmall?.copyWith(
-                  color: AppColors.textSecondary,
-                ),
-              ),
-            ],
-
-            const SizedBox(height: 16.0),
-
-            // Status Badge
-            Container(
-              padding: const EdgeInsets.symmetric(
-                horizontal: 12.0,
-                vertical: 6.0,
-              ),
-              decoration: BoxDecoration(
-                color: _getStatusColor(trip.status).withOpacity(0.1),
-                borderRadius: BorderRadius.circular(12.0),
-              ),
-              child: Text(
-                Helpers.getStatusLabel(trip.status),
-                style: textTheme.labelSmall?.copyWith(
-                  color: _getStatusColor(trip.status),
-                  fontWeight: FontWeight.w600,
-                ),
-              ),
-            ),
-
-            const SizedBox(height: 16.0),
-
-            // Trip Type
-            _buildTripInfoRow(
-              icon: Icons.local_shipping_outlined,
-              label: 'Type',
-              value: Helpers.getTripTypeLabel(trip.tripType),
-              textTheme: textTheme,
-            ),
-
-            const SizedBox(height: 12.0),
-
-            // Origin → Destination
-            if (trip.pickupLocation != null || trip.dropLocation != null)
-              Row(
-                children: [
-                  if (trip.pickupLocation != null)
-                    Expanded(
-                      child: _buildTripInfoRow(
-                        icon: Icons.location_on_outlined,
-                        label: 'Origin',
-                        value: trip.pickupLocation!.address ?? 'Location',
-                        textTheme: textTheme,
-                      ),
-                    ),
-                  if (trip.pickupLocation != null && trip.dropLocation != null) ...[
-                    const SizedBox(width: 16.0),
-                    Icon(
-                      Icons.arrow_forward,
-                      color: AppColors.textSecondary,
-                      size: 20.0,
-                    ),
-                    const SizedBox(width: 16.0),
-                  ],
-                  if (trip.dropLocation != null)
-                    Expanded(
-                      child: _buildTripInfoRow(
-                        icon: Icons.location_on,
-                        label: 'Destination',
-                        value: trip.dropLocation!.address ?? 'Location',
-                        textTheme: textTheme,
-                      ),
-                    ),
-                ],
-              ),
-
-            // Created Date
-            const SizedBox(height: 16.0),
-            Container(
-              padding: const EdgeInsets.all(12.0),
-              decoration: BoxDecoration(
-                color: AppColors.offWhite,
-                borderRadius: BorderRadius.circular(12.0),
-              ),
-              child: Row(
-                children: [
-                  Icon(
-                    Icons.calendar_today_outlined,
-                    color: AppColors.primary,
-                    size: 20.0,
-                  ),
-                  const SizedBox(width: 8.0),
-                  Text(
-                    'Created: ${Helpers.formatDateTime(trip.createdAt)}',
-                    style: textTheme.bodyMedium?.copyWith(
-                      color: AppColors.textPrimary,
-                      fontWeight: FontWeight.w500,
-                    ),
-                  ),
-                ],
-              ),
-            ),
-          ],
-        ),
-      ),
-    );
-  }
-
-  Widget _buildTripInfoRow({
-    required IconData icon,
-    required String label,
-    required String value,
-    required TextTheme textTheme,
-  }) {
-    return Row(
-      children: [
-        Icon(icon, size: 18.0, color: AppColors.textSecondary),
-        const SizedBox(width: 8.0),
-        Expanded(
-          child: Column(
-            crossAxisAlignment: CrossAxisAlignment.start,
-            children: [
-              Text(
-                label,
-                style: textTheme.bodySmall?.copyWith(
-                  color: AppColors.textSecondary,
-                ),
-              ),
-              const SizedBox(height: 2.0),
-              Text(
-                value,
-                style: textTheme.bodyMedium?.copyWith(
-                  color: AppColors.textPrimary,
-                  fontWeight: FontWeight.w500,
-                ),
-              ),
-            ],
+        return RefreshIndicator(
+          onRefresh: _onPullRefreshTrips,
+          child: ListView.builder(
+            physics: const AlwaysScrollableScrollPhysics(),
+            padding: const EdgeInsets.symmetric(horizontal: 24.0),
+            itemCount: filteredTrips.length,
+            itemBuilder: (context, index) {
+              final trip = filteredTrips[index];
+              return _buildTripCard(trip, textTheme, index, showAcceptButton: showAcceptButton, highlightTripId: highlightTripId);
+            },
           ),
-        ),
-      ],
+        );
+      },
     );
   }
 
-  Color _getStatusColor(String status) {
-    switch (status.toUpperCase()) {
-      case AppConstants.tripStatusActive:
-        return AppColors.info;
-      case AppConstants.tripStatusCompleted:
-        return AppColors.success;
-      case AppConstants.tripStatusPodPending:
-        return AppColors.warning;
-      case AppConstants.tripStatusPlanned:
-        return AppColors.textSecondary;
-      case AppConstants.tripStatusCancelled:
-        return AppColors.error;
-      default:
-        return AppColors.textSecondary;
+  void _scheduleClearHighlight(NavigationStateProvider navState) {
+    Future.delayed(const Duration(seconds: 3), () {
+      if (mounted) {
+        navState.clearTripHighlight();
+      }
+    });
+  }
+
+  Widget _buildTripCard(
+    TripModel trip,
+    TextTheme textTheme,
+    int index, {
+    bool showAcceptButton = false,
+    String? highlightTripId,
+  }) {
+    final isHighlighted = highlightTripId != null && trip.id == highlightTripId;
+    return Consumer<PinnedTripsProvider>(
+      builder: (context, pinned, _) {
+        return TripExpansionCard(
+          trip: trip,
+          textTheme: textTheme,
+          isHighlighted: isHighlighted,
+          showAcceptButton: showAcceptButton,
+          isPinned: pinned.isPinned(trip.id),
+          onPinTap: () => pinned.togglePin(trip.id),
+          onOpenDetail: () {
+            Navigator.of(context).pushNamed('/trip-detail', arguments: trip.id);
+          },
+          onAcceptTrip: showAcceptButton ? () => _onAcceptTrip(trip.id) : null,
+          onRejectTrip: showAcceptButton ? () => _onRejectTrip(trip.id) : null,
+        );
+      },
+    );
+  }
+
+  Future<void> _onAcceptTrip(String tripId) async {
+    final tripProvider = Provider.of<TripProvider>(context, listen: false);
+    try {
+      final success = await tripProvider.acceptTrip(tripId);
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(
+            content: Text(success ? 'Trip accepted' : 'Failed to accept trip'),
+            backgroundColor: success ? AppColors.success : AppColors.error,
+          ),
+        );
+        if (success) {
+          Navigator.of(context).pushNamed('/trip-detail', arguments: tripId);
+        }
+      }
+    } catch (e) {
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(
+            content: Text('Error: ${e.toString()}'),
+            backgroundColor: AppColors.error,
+          ),
+        );
+      }
     }
   }
+
+  Future<void> _onRejectTrip(String tripId) async {
+    final tripProvider = Provider.of<TripProvider>(context, listen: false);
+    try {
+      final success = await tripProvider.rejectTrip(tripId);
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(
+            content: Text(success ? 'Trip rejected' : 'Failed to reject trip'),
+            backgroundColor: success ? AppColors.success : AppColors.error,
+          ),
+        );
+      }
+    } catch (e) {
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(
+            content: Text('Error: ${e.toString()}'),
+            backgroundColor: AppColors.error,
+          ),
+        );
+      }
+    }
+  }
+
 }

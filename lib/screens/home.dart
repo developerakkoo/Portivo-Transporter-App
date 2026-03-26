@@ -91,7 +91,7 @@ class HomeScreen extends StatelessWidget {
             Expanded(
               child: _buildActionCard(
                 context: context,
-                icon: Icons.local_shipping_outlined,
+                icon: Icons.inventory_2_outlined,
                 title: 'New Shipment',
                 onTap: () {
                   // TODO: Navigate to new shipment

@@ -1,6 +1,7 @@
 import 'package:flutter/material.dart';
 import 'package:provider/provider.dart';
 import '../../core/theme/app_colors.dart';
+import '../../core/constants/app_constants.dart';
 import '../../providers/vehicle_provider.dart';
 import '../../providers/driver_provider.dart';
 
@@ -195,7 +196,9 @@ class _AddEditVehicleScreenState extends State<AddEditVehicleScreen> {
                 // Driver Selection
                 Consumer<DriverProvider>(
                   builder: (context, driverProvider, child) {
-                    final drivers = driverProvider.drivers;
+                    final drivers = driverProvider.drivers
+                        .where((d) => d.status == AppConstants.driverStatusActive)
+                        .toList();
                     
                     return DropdownButtonFormField<String>(
                       value: _selectedDriverId,

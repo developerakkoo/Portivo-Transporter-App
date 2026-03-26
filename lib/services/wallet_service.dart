@@ -123,12 +123,23 @@ class WalletService {
   }) async {
     try {
       if (kDebugMode) {
-        print('WalletService: Sending money');
+        print('WalletService: Sending money to $recipientId, amount: $amount');
       }
-      
-      // Note: This endpoint may need to be added to backend
-      // TODO: Implement when backend endpoint is available
-      return false;
+
+      if (amount <= 0) {
+        throw Exception('Amount must be greater than zero');
+      }
+
+      final response = await _api.post(
+        ApiConfig.walletTransfer,
+        data: {
+          'amount': amount,
+          'recipientId': recipientId,
+          if (description != null) 'description': description,
+        },
+      );
+
+      return response.data['success'] == true;
     } catch (e, stackTrace) {
       if (kDebugMode) {
         print('WalletService: Error sending money: $e');

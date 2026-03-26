@@ -234,6 +234,42 @@ class FuelProvider with ChangeNotifier {
     }
   }
 
+  Future<FuelCardModel?> assignFuelCard({
+    required String cardId,
+    required String driverId,
+  }) async {
+    _isLoading = true;
+    _error = null;
+    notifyListeners();
+
+    try {
+      final card = await _fuelCardService.assignFuelCard(
+        cardId: cardId,
+        driverId: driverId,
+      );
+
+      if (card != null) {
+        final idx = _fuelCards.indexWhere((c) => c.id == cardId);
+        if (idx >= 0) {
+          _fuelCards[idx] = card;
+        }
+        if (kDebugMode) {
+          print('FuelProvider: Fuel card assigned successfully');
+        }
+      }
+      return card;
+    } catch (e) {
+      _error = ErrorUtils.extractErrorMessage(e);
+      if (kDebugMode) {
+        print('FuelProvider: Error assigning fuel card: $_error');
+      }
+      return null;
+    } finally {
+      _isLoading = false;
+      notifyListeners();
+    }
+  }
+
   void clearError() {
     _error = null;
     notifyListeners();

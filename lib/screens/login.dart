@@ -4,6 +4,8 @@ import '../core/theme/app_colors.dart';
 import '../core/utils/validators.dart';
 import '../providers/auth_provider.dart';
 import '../utils/error_utils.dart';
+import '../widgets/permission_modal.dart';
+import '../services/device_permission_service.dart';
 
 class LoginScreen extends StatefulWidget {
   const LoginScreen({super.key});
@@ -12,14 +14,68 @@ class LoginScreen extends StatefulWidget {
   State<LoginScreen> createState() => _LoginScreenState();
 }
 
-class _LoginScreenState extends State<LoginScreen> {
+class _LoginScreenState extends State<LoginScreen> with WidgetsBindingObserver {
+  /// Prevents overlapping async permission checks (post-frame + lifecycle resume).
+  bool _permissionModalCheckInFlight = false;
+
+  final DevicePermissionService _devicePermissionService = DevicePermissionService();
+
   final _formKey = GlobalKey<FormState>();
   final _mobileController = TextEditingController();
   bool _isLoading = false;
   String? _errorMessage;
 
   @override
+  void initState() {
+    super.initState();
+    WidgetsBinding.instance.addObserver(this);
+    WidgetsBinding.instance.addPostFrameCallback((_) => _maybeShowPermissionModal());
+  }
+
+  @override
+  void didChangeAppLifecycleState(AppLifecycleState state) {
+    if (state == AppLifecycleState.resumed) {
+      _maybeShowPermissionModalAfterResume();
+    }
+  }
+
+  /// After returning from Settings (or multitasking), skip work entirely if the login gate is satisfied.
+  Future<void> _maybeShowPermissionModalAfterResume() async {
+    if (_permissionModalCheckInFlight) return;
+    if (await _devicePermissionService.areLoginGatePermissionsGranted()) {
+      return;
+    }
+    await _maybeShowPermissionModal();
+  }
+
+  /// Shows the login permission sheet when location/camera are not granted.
+  /// [_permissionModalCheckInFlight] stays true until the sheet is closed (prevents duplicate sheets).
+  Future<void> _maybeShowPermissionModal() async {
+    if (_permissionModalCheckInFlight || !mounted) return;
+    _permissionModalCheckInFlight = true;
+    try {
+      await Future<void>.delayed(const Duration(milliseconds: 150));
+      if (!mounted) return;
+      if (await _devicePermissionService.areLoginGatePermissionsGranted()) {
+        return;
+      }
+
+      await Future<void>.delayed(const Duration(milliseconds: 200));
+      if (!mounted) return;
+      if (await _devicePermissionService.areLoginGatePermissionsGranted()) {
+        return;
+      }
+
+      if (!mounted) return;
+      await PermissionModal.show(context);
+    } finally {
+      _permissionModalCheckInFlight = false;
+    }
+  }
+
+  @override
   void dispose() {
+    WidgetsBinding.instance.removeObserver(this);
     _mobileController.dispose();
     super.dispose();
   }
@@ -156,49 +212,11 @@ class _LoginScreenState extends State<LoginScreen> {
 
   Widget _buildHeader(TextTheme textTheme, Size size) {
     final isSmallScreen = size.height < 700;
-    
+
     return Column(
       mainAxisSize: MainAxisSize.min,
       crossAxisAlignment: CrossAxisAlignment.center,
       children: [
-        // Logo with professional container
-        Container(
-          padding: EdgeInsets.all(isSmallScreen ? 12.0 : 16.0),
-          decoration: BoxDecoration(
-            color: AppColors.background,
-            borderRadius: BorderRadius.circular(20.0),
-            boxShadow: [
-              BoxShadow(
-                color: AppColors.primary.withOpacity(0.1),
-                blurRadius: 20.0,
-                offset: const Offset(0, 4),
-              ),
-            ],
-          ),
-          child: Image.asset(
-            'assets/logo.png',
-            height: isSmallScreen ? 50.0 : 70.0,
-            width: isSmallScreen ? 120.0 : 160.0,
-            fit: BoxFit.contain,
-            errorBuilder: (context, error, stackTrace) {
-              return Container(
-                height: isSmallScreen ? 50.0 : 70.0,
-                width: isSmallScreen ? 120.0 : 160.0,
-                decoration: BoxDecoration(
-                  color: AppColors.offWhite,
-                  borderRadius: BorderRadius.circular(12.0),
-                ),
-                child: Icon(
-                  Icons.local_shipping,
-                  size: isSmallScreen ? 30.0 : 40.0,
-                  color: AppColors.primary,
-                ),
-              );
-            },
-          ),
-        ),
-        SizedBox(height: isSmallScreen ? 16.0 : 24.0),
-        
         // Heading
         Text(
           'Welcome to Porttivo Transporter',

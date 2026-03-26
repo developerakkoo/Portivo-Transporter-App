@@ -1,11 +1,11 @@
 import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
-import 'package:flutter/services.dart';
 import 'package:provider/provider.dart';
 import '../core/theme/app_colors.dart';
 import '../services/auth_service.dart';
 import '../providers/auth_provider.dart';
 import '../services/socket_service.dart';
+import '../widgets/pin_digit_field.dart';
 
 enum PinSetupStep {
   enter,
@@ -172,7 +172,8 @@ class _PinSetupScreenState extends State<PinSetupScreen> {
             try {
               final socketService = SocketService();
               await socketService.connect();
-              socketService.joinTransporterRoom(authProvider.user!.id);
+              final u = authProvider.user!;
+              socketService.joinTransporterRoom(u.transporterId ?? u.id);
             } catch (e) {
               // Socket.IO connection failure is non-critical
               if (kDebugMode) {
@@ -367,80 +368,68 @@ class _PinSetupScreenState extends State<PinSetupScreen> {
   }) {
     final isFocused = focusNode.hasFocus;
     final hasValue = controller.text.isNotEmpty;
+    final controllers = _currentStep == PinSetupStep.enter
+        ? _pinControllers
+        : _confirmPinControllers;
+    final focusNodes = _currentStep == PinSetupStep.enter
+        ? _pinFocusNodes
+        : _confirmFocusNodes;
 
-    return SizedBox(
-      width: 70.0,
-      height: 70.0,
-      child: TextFormField(
-        controller: controller,
-        focusNode: focusNode,
-        textAlign: TextAlign.center,
-        keyboardType: TextInputType.number,
-        maxLength: 1,
-        inputFormatters: [
-          FilteringTextInputFormatter.digitsOnly,
-        ],
-        style: Theme.of(context).textTheme.headlineMedium?.copyWith(
-              color: AppColors.textPrimary,
-              fontWeight: FontWeight.w600,
-            ),
-        decoration: InputDecoration(
-          counterText: '',
-          filled: true,
-          fillColor: hasValue || isFocused
-              ? AppColors.background
-              : AppColors.offWhite,
-          contentPadding: EdgeInsets.zero,
-          border: OutlineInputBorder(
-            borderRadius: BorderRadius.circular(16.0),
-            borderSide: BorderSide(
-              color: isFocused
-                  ? AppColors.primary
-                  : AppColors.dividerGrey,
-              width: isFocused ? 2.0 : 1.0,
-            ),
+    return PinDigitField(
+      index: index,
+      controller: controller,
+      focusNode: focusNode,
+      controllers: controllers,
+      focusNodes: focusNodes,
+      onChanged: (value) {
+        setState(() {});
+        _handlePinInput(
+          value,
+          index,
+          controllers,
+          focusNodes,
+        );
+      },
+      onStateChanged: () => setState(() {}),
+      style: Theme.of(context).textTheme.headlineMedium?.copyWith(
+            color: AppColors.textPrimary,
+            fontWeight: FontWeight.w600,
           ),
-          enabledBorder: OutlineInputBorder(
-            borderRadius: BorderRadius.circular(16.0),
-            borderSide: BorderSide(
-              color: isFocused
-                  ? AppColors.primary
-                  : AppColors.dividerGrey,
-              width: isFocused ? 2.0 : 1.0,
-            ),
-          ),
-          focusedBorder: OutlineInputBorder(
-            borderRadius: BorderRadius.circular(16.0),
-            borderSide: const BorderSide(
-              color: AppColors.primary,
-              width: 2.0,
-            ),
+      decoration: InputDecoration(
+        counterText: '',
+        filled: true,
+        fillColor: hasValue || isFocused
+            ? AppColors.background
+            : AppColors.offWhite,
+        contentPadding: EdgeInsets.zero,
+        border: OutlineInputBorder(
+          borderRadius: BorderRadius.circular(16.0),
+          borderSide: BorderSide(
+            color: isFocused
+                ? AppColors.primary
+                : AppColors.dividerGrey,
+            width: isFocused ? 2.0 : 1.0,
           ),
         ),
-        onChanged: (value) {
-          setState(() {});
-          _handlePinInput(
-            value,
-            index,
-            _currentStep == PinSetupStep.enter
-                ? _pinControllers
-                : _confirmPinControllers,
-            _currentStep == PinSetupStep.enter
-                ? _pinFocusNodes
-                : _confirmFocusNodes,
-          );
-        },
-        onTap: () {
-          setState(() {});
-        },
-        onEditingComplete: () {
-          _checkPinCompletion();
-        },
-        onFieldSubmitted: (_) {
-          _checkPinCompletion();
-        },
-        buildCounter: (context, {required currentLength, required isFocused, maxLength}) => null,
+        enabledBorder: OutlineInputBorder(
+          borderRadius: BorderRadius.circular(16.0),
+          borderSide: BorderSide(
+            color: isFocused
+                ? AppColors.primary
+                : AppColors.dividerGrey,
+            width: isFocused ? 2.0 : 1.0,
+          ),
+        ),
+        focusedBorder: OutlineInputBorder(
+          borderRadius: BorderRadius.circular(16.0),
+          borderSide: const BorderSide(
+            color: AppColors.primary,
+            width: 2.0,
+          ),
+        ),
       ),
+      onEditingComplete: _checkPinCompletion,
+      onFieldSubmitted: (_) => _checkPinCompletion(),
     );
   }
 

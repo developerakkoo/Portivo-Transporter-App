@@ -32,11 +32,19 @@ class MoreTab extends StatelessWidget {
                     Navigator.of(context).pushNamed('/profile');
                   },
                 ),
+                _buildMenuItem(
+                  context: context,
+                  icon: Icons.map_outlined,
+                  title: 'View Map',
+                  onTap: () {
+                    Navigator.of(context).pushNamed('/map');
+                  },
+                ),
                 // Vehicles - requires manageVehicles permission
                 if (permissionService.hasPermission('manageVehicles') || permissionService.isTransporter)
                   _buildMenuItem(
                     context: context,
-                    icon: Icons.directions_car_outlined,
+                    icon: Icons.inventory_2_outlined,
                     title: 'Vehicles',
                     onTap: () {
                       Navigator.of(context).pushNamed('/vehicles');

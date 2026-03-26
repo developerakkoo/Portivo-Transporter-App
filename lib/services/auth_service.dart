@@ -314,4 +314,10 @@ class AuthService {
   Future<String?> getTransporterId() async {
     return await _storage.getTransporterId();
   }
+
+  /// Last logged-in user id (transporter or company user), for session restore.
+  Future<String?> getStoredUserId() async {
+    await _storage.init();
+    return await _storage.getUserData();
+  }
 }

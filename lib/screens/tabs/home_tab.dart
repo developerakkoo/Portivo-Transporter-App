@@ -3,11 +3,15 @@ import 'package:flutter/foundation.dart';
 import 'package:carousel_slider/carousel_slider.dart';
 import 'package:provider/provider.dart';
 import '../../core/theme/app_colors.dart';
+import '../../core/constants/app_constants.dart';
 import '../../core/utils/helpers.dart';
 import '../../data/models/trip_model.dart';
 import '../../providers/trip_provider.dart';
+import '../../providers/pinned_trips_provider.dart';
 import '../../providers/wallet_provider.dart';
 import '../../providers/auth_provider.dart';
+import '../../providers/notification_provider.dart';
+import '../../widgets/trip_expansion_card.dart';
 import '../../services/permission_service.dart';
 
 class HomeTab extends StatefulWidget {
@@ -23,29 +27,87 @@ class _HomeTabState extends State<HomeTab> {
   @override
   void initState() {
     super.initState();
-    // Load trips and wallet when screen initializes
-    WidgetsBinding.instance.addPostFrameCallback((_) {
-      if (mounted) {
-        try {
-          final tripProvider = Provider.of<TripProvider>(context, listen: false);
-          final walletProvider = Provider.of<WalletProvider>(context, listen: false);
-          tripProvider.loadTrips(refresh: true).catchError((e) {
-            if (kDebugMode) {
-              print('HomeTab: Error loading trips: $e');
-            }
-          });
-          walletProvider.loadBalance().catchError((e) {
-            if (kDebugMode) {
-              print('HomeTab: Error loading wallet: $e');
-            }
-          });
-        } catch (e) {
-          if (kDebugMode) {
-            print('HomeTab: Error accessing providers: $e');
-          }
+    // Load trips, wallet, and notifications when screen initializes
+    WidgetsBinding.instance.addPostFrameCallback((_) async {
+      if (!mounted) return;
+      try {
+        final tripProvider = Provider.of<TripProvider>(context, listen: false);
+        final walletProvider = Provider.of<WalletProvider>(context, listen: false);
+        final notificationProvider = Provider.of<NotificationProvider>(context, listen: false);
+        final pinnedProvider = Provider.of<PinnedTripsProvider>(context, listen: false);
+        await tripProvider.bootstrapTripsIfNeeded();
+        await walletProvider.loadBalance();
+        await notificationProvider.loadNotifications(refresh: true);
+        await pinnedProvider.load();
+        await pinnedProvider.reconcileWithTripProvider(tripProvider);
+      } catch (e) {
+        if (kDebugMode) {
+          print('HomeTab: Error loading initial data: $e');
         }
       }
     });
+  }
+
+  Future<void> _onHomeRefresh() async {
+    final tripProvider = Provider.of<TripProvider>(context, listen: false);
+    final walletProvider = Provider.of<WalletProvider>(context, listen: false);
+    final notificationProvider = Provider.of<NotificationProvider>(context, listen: false);
+    final pinnedProvider = Provider.of<PinnedTripsProvider>(context, listen: false);
+    await tripProvider.bootstrapTripsIfNeeded();
+    await walletProvider.loadBalance();
+    await notificationProvider.loadNotifications(refresh: true);
+    await pinnedProvider.reconcileWithTripProvider(tripProvider);
+  }
+
+  Future<void> _onAcceptTrip(String tripId) async {
+    final tripProvider = Provider.of<TripProvider>(context, listen: false);
+    try {
+      final success = await tripProvider.acceptTrip(tripId);
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(
+            content: Text(success ? 'Trip accepted' : 'Failed to accept trip'),
+            backgroundColor: success ? AppColors.success : AppColors.error,
+          ),
+        );
+        if (success) {
+          Navigator.of(context).pushNamed('/trip-detail', arguments: tripId);
+        }
+      }
+    } catch (e) {
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(
+            content: Text('Error: ${e.toString()}'),
+            backgroundColor: AppColors.error,
+          ),
+        );
+      }
+    }
+  }
+
+  Future<void> _onRejectTrip(String tripId) async {
+    final tripProvider = Provider.of<TripProvider>(context, listen: false);
+    try {
+      final success = await tripProvider.rejectTrip(tripId);
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(
+            content: Text(success ? 'Trip rejected' : 'Failed to reject trip'),
+            backgroundColor: success ? AppColors.success : AppColors.error,
+          ),
+        );
+      }
+    } catch (e) {
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(
+            content: Text('Error: ${e.toString()}'),
+            backgroundColor: AppColors.error,
+          ),
+        );
+      }
+    }
   }
 
   @override
@@ -57,10 +119,46 @@ class _HomeTabState extends State<HomeTab> {
       appBar: AppBar(
         title: const Text('Prottivo Transporter'),
         actions: [
-          IconButton(
-            icon: const Icon(Icons.notifications_outlined),
-            onPressed: () {
-              Navigator.of(context).pushNamed('/notifications');
+          Consumer<NotificationProvider>(
+            builder: (context, notificationProvider, _) {
+              return Stack(
+                clipBehavior: Clip.none,
+                children: [
+                  IconButton(
+                    icon: const Icon(Icons.notifications_outlined),
+                    onPressed: () {
+                      Navigator.of(context).pushNamed('/notifications');
+                    },
+                  ),
+                  if (notificationProvider.unreadCount > 0)
+                    Positioned(
+                      top: 6,
+                      right: 6,
+                      child: Container(
+                        padding: const EdgeInsets.all(4),
+                        constraints: const BoxConstraints(
+                          minWidth: 18,
+                          minHeight: 18,
+                        ),
+                        decoration: const BoxDecoration(
+                          color: AppColors.error,
+                          shape: BoxShape.circle,
+                        ),
+                        child: Text(
+                          notificationProvider.unreadCount > 99
+                              ? '99+'
+                              : notificationProvider.unreadCount.toString(),
+                          style: const TextStyle(
+                            color: Colors.white,
+                            fontSize: 10,
+                            fontWeight: FontWeight.bold,
+                          ),
+                          textAlign: TextAlign.center,
+                        ),
+                      ),
+                    ),
+                ],
+              );
             },
           ),
           IconButton(
@@ -72,15 +170,15 @@ class _HomeTabState extends State<HomeTab> {
         ],
       ),
       body: SafeArea(
-        child: Consumer<TripProvider>(
-          builder: (context, tripProvider, child) {
+        child: Consumer2<TripProvider, PinnedTripsProvider>(
+          builder: (context, tripProvider, pinnedProvider, child) {
             // Show loading state
             if (tripProvider.isLoading && tripProvider.trips.isEmpty) {
               return const Center(
                 child: CircularProgressIndicator(),
               );
             }
-            
+
             // Show error state
             if (tripProvider.error != null && tripProvider.trips.isEmpty) {
               return Center(
@@ -121,56 +219,120 @@ class _HomeTabState extends State<HomeTab> {
                 ),
               );
             }
-            
+
             // Normal UI
-            return SingleChildScrollView(
-              padding: const EdgeInsets.only(bottom: 24.0),
-              child: Column(
-                crossAxisAlignment: CrossAxisAlignment.stretch,
-                children: [
-                  // Banner Carousel Section
-                  // _buildBannerCarousel(textTheme),
+            return RefreshIndicator(
+              onRefresh: _onHomeRefresh,
+              child: SingleChildScrollView(
+                physics: const AlwaysScrollableScrollPhysics(),
+                padding: const EdgeInsets.only(bottom: 24.0),
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.stretch,
+                  children: [
+                    Padding(
+                      padding: const EdgeInsets.symmetric(horizontal: 24.0),
+                      child: _buildOverviewCards(textTheme, tripProvider),
+                    ),
 
-                  // const SizedBox(height: 24.0),
+                    const SizedBox(height: 24.0),
 
-                  // Overview Cards Section (2x2 Grid)
-                  Padding(
-                    padding: const EdgeInsets.symmetric(horizontal: 24.0),
-                    child: _buildOverviewCards(textTheme, tripProvider),
-                  ),
+                    Builder(
+                      builder: (context) {
+                        final activeTrips = tripProvider.activeTrips;
+                        if (activeTrips.isNotEmpty) {
+                          return Column(
+                            children: [
+                              Padding(
+                                padding: const EdgeInsets.symmetric(horizontal: 24.0),
+                                child: _buildActiveTripCard(textTheme, activeTrips.first),
+                              ),
+                              const SizedBox(height: 24.0),
+                            ],
+                          );
+                        }
+                        return const SizedBox.shrink();
+                      },
+                    ),
 
-              const SizedBox(height: 24.0),
+                    _buildPinnedTripsSection(textTheme, tripProvider, pinnedProvider),
 
-                  // Active Trip Card Section
-                  Builder(
-                    builder: (context) {
-                      final activeTrips = tripProvider.activeTrips;
-                      if (activeTrips.isNotEmpty) {
-                        return Column(
-                          children: [
-                            Padding(
-                              padding: const EdgeInsets.symmetric(horizontal: 24.0),
-                              child: _buildActiveTripCard(textTheme, activeTrips.first),
-                            ),
-                            const SizedBox(height: 24.0),
-                          ],
-                        );
-                      }
-                      return const SizedBox.shrink();
-                    },
-                  ),
-
-                  // Action Buttons Section
-                  Padding(
-                    padding: const EdgeInsets.symmetric(horizontal: 24.0),
-                    child: _buildActionButtons(context, textTheme),
-                  ),
-                ],
+                    Padding(
+                      padding: const EdgeInsets.symmetric(horizontal: 24.0),
+                      child: _buildActionButtons(context, textTheme),
+                    ),
+                  ],
+                ),
               ),
             );
           },
         ),
       ),
+    );
+  }
+
+  Widget _buildPinnedTripsSection(
+    TextTheme textTheme,
+    TripProvider tripProvider,
+    PinnedTripsProvider pinnedProvider,
+  ) {
+    if (pinnedProvider.pinnedIds.isEmpty) {
+      return const SizedBox.shrink();
+    }
+
+    final byId = <String, TripModel>{};
+    for (final t in tripProvider.trips) {
+      byId[t.id] = t;
+    }
+    for (final t in tripProvider.availableTrips) {
+      byId[t.id] = t;
+    }
+
+    final ordered = <TripModel>[];
+    for (final id in pinnedProvider.pinnedIds) {
+      final t = byId[id];
+      if (t != null) ordered.add(t);
+    }
+    if (ordered.isEmpty) {
+      return const SizedBox.shrink();
+    }
+
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        Padding(
+          padding: const EdgeInsets.symmetric(horizontal: 24.0),
+          child: Text(
+            'Pinned trips',
+            style: textTheme.titleLarge?.copyWith(
+              fontWeight: FontWeight.w600,
+              color: AppColors.textPrimary,
+            ),
+          ),
+        ),
+        const SizedBox(height: 12.0),
+        Padding(
+          padding: const EdgeInsets.symmetric(horizontal: 24.0),
+          child: Column(
+            children: ordered.map((trip) {
+              final showAccept =
+                  trip.status.toUpperCase() == AppConstants.tripStatusBooked;
+              return TripExpansionCard(
+                trip: trip,
+                textTheme: textTheme,
+                showAcceptButton: showAccept,
+                isPinned: pinnedProvider.isPinned(trip.id),
+                onPinTap: () => pinnedProvider.togglePin(trip.id),
+                onOpenDetail: () {
+                  Navigator.of(context).pushNamed('/trip-detail', arguments: trip.id);
+                },
+                onAcceptTrip: showAccept ? () => _onAcceptTrip(trip.id) : null,
+                onRejectTrip: showAccept ? () => _onRejectTrip(trip.id) : null,
+              );
+            }).toList(),
+          ),
+        ),
+        const SizedBox(height: 24.0),
+      ],
     );
   }
 
@@ -314,7 +476,7 @@ class _HomeTabState extends State<HomeTab> {
           children: [
             Expanded(
               child: _buildOverviewCard(
-                icon: Icons.local_shipping,
+                icon: Icons.inventory_2,
                 value: activeTripsCount.toString(),
                 label: 'Active Trips',
                 textTheme: textTheme,
@@ -582,105 +744,125 @@ class _HomeTabState extends State<HomeTab> {
               SizedBox(
                 height: 52.0,
                 child: ElevatedButton(
-                  onPressed: () {
-                    Navigator.of(context).pushNamed('/create-trip');
+                  onPressed: () async {
+                    await Navigator.of(context).pushNamed('/create-trip');
+                    if (!context.mounted) return;
+                    final tripProvider =
+                        Provider.of<TripProvider>(context, listen: false);
+                    final pinnedProvider =
+                        Provider.of<PinnedTripsProvider>(context, listen: false);
+                    await tripProvider.loadTrips(refresh: true);
+                    await tripProvider.loadAvailableTrips(refresh: true);
+                    await pinnedProvider.reconcileWithTripProvider(tripProvider);
                   },
-            style: ElevatedButton.styleFrom(
-              backgroundColor: AppColors.primary,
-              foregroundColor: AppColors.background,
-              elevation: 0,
-              shape: RoundedRectangleBorder(
-                borderRadius: BorderRadius.circular(12.0),
-              ),
-            ),
-            child: Row(
-              mainAxisAlignment: MainAxisAlignment.center,
-              children: [
-                const Icon(Icons.add_circle_outline, size: 20.0),
-                const SizedBox(width: 8.0),
-                Text(
-                  'Create Trip',
-                  style: textTheme.labelLarge?.copyWith(
-                    color: AppColors.background,
-                    fontWeight: FontWeight.w600,
+                  style: ElevatedButton.styleFrom(
+                    backgroundColor: AppColors.primary,
+                    foregroundColor: AppColors.background,
+                    elevation: 0,
+                    shape: RoundedRectangleBorder(
+                      borderRadius: BorderRadius.circular(12.0),
+                    ),
+                  ),
+                  child: Row(
+                    mainAxisAlignment: MainAxisAlignment.center,
+                    children: [
+                      const Icon(Icons.add_circle_outline, size: 20.0),
+                      const SizedBox(width: 8.0),
+                      Flexible(
+                        child: Text(
+                          'Create Trip',
+                          overflow: TextOverflow.ellipsis,
+                          maxLines: 1,
+                          style: textTheme.labelLarge?.copyWith(
+                            color: AppColors.background,
+                            fontWeight: FontWeight.w600,
+                          ),
+                        ),
+                      ),
+                    ],
                   ),
                 ),
-              ],
-            ),
-          ),
-                ),
+              ),
             const SizedBox(height: 12.0),
             Row(
               children: [
                 Expanded(
-              child: SizedBox(
-                height: 52.0,
-                child: OutlinedButton(
-                  onPressed: () {
-                    Navigator.of(context).pushNamed('/add-driver');
-                  },
-                  style: OutlinedButton.styleFrom(
-                    foregroundColor: AppColors.primary,
-                    side: const BorderSide(
-                      color: AppColors.primary,
-                      width: 1.5,
-                    ),
-                    shape: RoundedRectangleBorder(
-                      borderRadius: BorderRadius.circular(12.0),
-                    ),
-                  ),
-                  child: Row(
-                    mainAxisAlignment: MainAxisAlignment.center,
-                    children: [
-                      const Icon(Icons.person_add_outlined, size: 20.0),
-                      const SizedBox(width: 8.0),
-                      Text(
-                        'Add Driver',
-                        style: textTheme.labelLarge?.copyWith(
+                  child: SizedBox(
+                    height: 52.0,
+                    child: OutlinedButton(
+                      onPressed: () {
+                        Navigator.of(context).pushNamed('/add-driver');
+                      },
+                      style: OutlinedButton.styleFrom(
+                        foregroundColor: AppColors.primary,
+                        side: const BorderSide(
                           color: AppColors.primary,
-                          fontWeight: FontWeight.w600,
+                          width: 1.5,
+                        ),
+                        shape: RoundedRectangleBorder(
+                          borderRadius: BorderRadius.circular(12.0),
                         ),
                       ),
-                    ],
+                      child: Row(
+                        mainAxisAlignment: MainAxisAlignment.center,
+                        children: [
+                          const Icon(Icons.person_add_outlined, size: 20.0),
+                          const SizedBox(width: 8.0),
+                          Flexible(
+                            child: Text(
+                              'Add Driver',
+                              overflow: TextOverflow.ellipsis,
+                              maxLines: 1,
+                              style: textTheme.labelLarge?.copyWith(
+                                color: AppColors.primary,
+                                fontWeight: FontWeight.w600,
+                              ),
+                            ),
+                          ),
+                        ],
+                      ),
+                    ),
                   ),
                 ),
-              ),
-            ),
-            const SizedBox(width: 12.0),
-            Expanded(
-              child: SizedBox(
-                height: 52.0,
-                child: OutlinedButton(
-                  onPressed: () {
-                    Navigator.of(context).pushNamed('/add-vehicle');
-                  },
-                  style: OutlinedButton.styleFrom(
-                    foregroundColor: AppColors.primary,
-                    side: const BorderSide(
-                      color: AppColors.primary,
-                      width: 1.5,
-                    ),
-                    shape: RoundedRectangleBorder(
-                      borderRadius: BorderRadius.circular(12.0),
-                    ),
-                  ),
-                  child: Row(
-                    mainAxisAlignment: MainAxisAlignment.center,
-                    children: [
-                      const Icon(Icons.directions_car_outlined, size: 20.0),
-                      const SizedBox(width: 8.0),
-                      Text(
-                        'Add Vehicle',
-                        style: textTheme.labelLarge?.copyWith(
+                const SizedBox(width: 12.0),
+                Expanded(
+                  child: SizedBox(
+                    height: 52.0,
+                    child: OutlinedButton(
+                      onPressed: () {
+                        Navigator.of(context).pushNamed('/add-vehicle');
+                      },
+                      style: OutlinedButton.styleFrom(
+                        foregroundColor: AppColors.primary,
+                        side: const BorderSide(
                           color: AppColors.primary,
-                          fontWeight: FontWeight.w600,
+                          width: 1.5,
+                        ),
+                        shape: RoundedRectangleBorder(
+                          borderRadius: BorderRadius.circular(12.0),
                         ),
                       ),
-                    ],
+                      child: Row(
+                        mainAxisAlignment: MainAxisAlignment.center,
+                        children: [
+                          const Icon(Icons.inventory_2_outlined, size: 20.0),
+                          const SizedBox(width: 8.0),
+                          Flexible(
+                            child: Text(
+                              'Add Vehicle',
+                              overflow: TextOverflow.ellipsis,
+                              maxLines: 1,
+                              style: textTheme.labelLarge?.copyWith(
+                                color: AppColors.primary,
+                                fontWeight: FontWeight.w600,
+                              ),
+                            ),
+                          ),
+                        ],
+                      ),
+                    ),
                   ),
                 ),
-              ),
-            ),
               ],
             ),
           ],
