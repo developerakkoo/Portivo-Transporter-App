@@ -8,7 +8,13 @@ class AuthService {
   final ApiService _api = ApiService();
   final StorageService _storage = StorageService();
 
-  Future<AuthResponseModel> register(String mobile, String name, String email, String company) async {
+  Future<AuthResponseModel> register(
+    String mobile,
+    String name,
+    String email,
+    String company,
+    String operatingCountry,
+  ) async {
     try {
       if (kDebugMode) {
         print('AuthService: Registering transporter with mobile: $mobile');
@@ -21,6 +27,7 @@ class AuthService {
           'name': name,
           'email': email,
           'company': company,
+          'operatingCountry': operatingCountry,
         },
       );
 

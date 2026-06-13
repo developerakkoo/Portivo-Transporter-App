@@ -7,14 +7,21 @@ import 'api_service.dart';
 class DriverService {
   final ApiService _api = ApiService();
 
-  Future<List<DriverModel>> getDriversByTransporter(String transporterId) async {
+  Future<List<DriverModel>> getDriversByTransporter(
+    String transporterId, {
+    bool availableForTrip = false,
+  }) async {
     try {
       if (kDebugMode) {
         print('DriverService: Fetching drivers for transporter: $transporterId');
       }
+
+      final queryParams = <String, dynamic>{};
+      if (availableForTrip) queryParams['availableForTrip'] = 'true';
       
       final response = await _api.get(
         ApiConfig.getDriversByTransporter(transporterId),
+        queryParameters: queryParams.isEmpty ? null : queryParams,
       );
 
       if (response.data['success'] == true) {

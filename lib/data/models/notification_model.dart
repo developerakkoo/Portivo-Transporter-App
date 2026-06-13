@@ -42,4 +42,21 @@ class NotificationModel {
   }
 
   String? get tripId => data['tripId']?.toString();
+
+  String? get bookingId => data['bookingId']?.toString();
+
+  String? get marketplaceSenderId => data['senderId']?.toString();
+
+  String? get marketplaceSenderName => data['senderName']?.toString();
+
+  String? get vehicleTypeRequestId => data['requestId']?.toString();
+
+  String? get requestedVehicleTypeName =>
+      data['requestedName']?.toString();
+
+  String? get vehicleTypeRejectionReason =>
+      data['rejectionReason']?.toString();
+
+  bool get isVehicleTypeDecision =>
+      type == 'VEHICLE_TYPE_APPROVED' || type == 'VEHICLE_TYPE_REJECTED';
 }

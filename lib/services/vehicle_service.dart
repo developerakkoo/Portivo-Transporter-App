@@ -13,6 +13,7 @@ class VehicleService {
     String? status,
     String? ownerType,
     String? driverId,
+    bool availableForTrip = false,
   }) async {
     try {
       if (kDebugMode) {
@@ -23,6 +24,7 @@ class VehicleService {
       if (status != null) queryParams['status'] = status;
       if (ownerType != null) queryParams['ownerType'] = ownerType;
       if (driverId != null) queryParams['driverId'] = driverId;
+      if (availableForTrip) queryParams['availableForTrip'] = 'true';
 
       final response = await _api.get(
         ApiConfig.vehicles,

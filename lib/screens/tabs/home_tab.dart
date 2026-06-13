@@ -2,6 +2,7 @@ import 'package:flutter/material.dart';
 import 'package:flutter/foundation.dart';
 import 'package:carousel_slider/carousel_slider.dart';
 import 'package:provider/provider.dart';
+import '../../core/constants/app_copy.dart';
 import '../../core/theme/app_colors.dart';
 import '../../core/constants/app_constants.dart';
 import '../../core/utils/helpers.dart';
@@ -11,7 +12,9 @@ import '../../providers/pinned_trips_provider.dart';
 import '../../providers/wallet_provider.dart';
 import '../../providers/auth_provider.dart';
 import '../../providers/notification_provider.dart';
+import '../../providers/navigation_state_provider.dart';
 import '../../widgets/trip_expansion_card.dart';
+import '../../core/utils/create_trip_navigation.dart';
 import '../../services/permission_service.dart';
 
 class HomeTab extends StatefulWidget {
@@ -67,6 +70,33 @@ class _HomeTabState extends State<HomeTab> {
         ScaffoldMessenger.of(context).showSnackBar(
           SnackBar(
             content: Text(success ? 'Trip accepted' : 'Failed to accept trip'),
+            backgroundColor: success ? AppColors.success : AppColors.error,
+          ),
+        );
+        if (success) {
+          Navigator.of(context).pushNamed('/trip-detail', arguments: tripId);
+        }
+      }
+    } catch (e) {
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(
+            content: Text('Error: ${e.toString()}'),
+            backgroundColor: AppColors.error,
+          ),
+        );
+      }
+    }
+  }
+
+  Future<void> _onStartTrip(String tripId) async {
+    final tripProvider = Provider.of<TripProvider>(context, listen: false);
+    try {
+      final success = await tripProvider.startTrip(tripId);
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(
+            content: Text(success ? 'Trip started' : (tripProvider.error ?? 'Failed to start trip')),
             backgroundColor: success ? AppColors.success : AppColors.error,
           ),
         );
@@ -231,7 +261,7 @@ class _HomeTabState extends State<HomeTab> {
                   children: [
                     Padding(
                       padding: const EdgeInsets.symmetric(horizontal: 24.0),
-                      child: _buildOverviewCards(textTheme, tripProvider),
+                      child: _buildOverviewCards(context, textTheme, tripProvider),
                     ),
 
                     const SizedBox(height: 24.0),
@@ -316,6 +346,9 @@ class _HomeTabState extends State<HomeTab> {
             children: ordered.map((trip) {
               final showAccept =
                   trip.status.toUpperCase() == AppConstants.tripStatusBooked;
+              final canStart = trip.status == AppConstants.tripStatusPlanned &&
+                  trip.canStartTrip &&
+                  !trip.isQueuedBlocked;
               return TripExpansionCard(
                 trip: trip,
                 textTheme: textTheme,
@@ -327,6 +360,9 @@ class _HomeTabState extends State<HomeTab> {
                 },
                 onAcceptTrip: showAccept ? () => _onAcceptTrip(trip.id) : null,
                 onRejectTrip: showAccept ? () => _onRejectTrip(trip.id) : null,
+                onStartTrip: canStart ? () => _onStartTrip(trip.id) : null,
+                driverTrackingStatus:
+                    tripProvider.driverTrackingStatusFor(trip.id),
               );
             }).toList(),
           ),
@@ -456,11 +492,18 @@ class _HomeTabState extends State<HomeTab> {
     );
   }
 
-  Widget _buildOverviewCards(TextTheme textTheme, TripProvider tripProvider) {
+  Widget _buildOverviewCards(
+    BuildContext context,
+    TextTheme textTheme,
+    TripProvider tripProvider,
+  ) {
     final activeTripsCount = tripProvider.activeTrips.length;
     final completedTripsCount = tripProvider.completedTrips.length;
     final plannedTripsCount = tripProvider.plannedTrips.length;
-    
+    void openTrips(int subTabIndex) {
+      context.read<NavigationStateProvider>().requestOpenTripsSubTab(subTabIndex);
+    }
+
     return Column(
       crossAxisAlignment: CrossAxisAlignment.start,
       children: [
@@ -480,6 +523,8 @@ class _HomeTabState extends State<HomeTab> {
                 value: activeTripsCount.toString(),
                 label: 'Active Trips',
                 textTheme: textTheme,
+                onTap: () => openTrips(0),
+                tooltip: 'Open Active trips',
               ),
             ),
             const SizedBox(width: 16.0),
@@ -489,6 +534,8 @@ class _HomeTabState extends State<HomeTab> {
                 value: plannedTripsCount.toString(),
                 label: 'Planned Trips',
                 textTheme: textTheme,
+                onTap: () => openTrips(0),
+                tooltip: 'Open Active trips (includes planned)',
               ),
             ),
           ],
@@ -502,6 +549,8 @@ class _HomeTabState extends State<HomeTab> {
                 value: completedTripsCount.toString(),
                 label: 'Completed Trips',
                 textTheme: textTheme,
+                onTap: () => openTrips(2),
+                tooltip: 'Open Completed trips',
               ),
             ),
             const SizedBox(width: 16.0),
@@ -509,8 +558,10 @@ class _HomeTabState extends State<HomeTab> {
               child: _buildOverviewCard(
                 icon: Icons.pending_actions,
                 value: tripProvider.podPendingTrips.length.toString(),
-                label: 'POD Pending',
+                label: AppCopy.awaitingPod,
                 textTheme: textTheme,
+                onTap: () => openTrips(1),
+                tooltip: 'Open ${AppCopy.awaitingPod} trips',
               ),
             ),
           ],
@@ -524,14 +575,11 @@ class _HomeTabState extends State<HomeTab> {
     required String value,
     required String label,
     required TextTheme textTheme,
+    required VoidCallback onTap,
+    String? tooltip,
   }) {
-    return Container(
+    final child = Padding(
       padding: const EdgeInsets.all(20.0),
-      decoration: BoxDecoration(
-        color: AppColors.offWhite,
-        borderRadius: BorderRadius.circular(16.0),
-        border: Border.all(color: AppColors.dividerGrey, width: 1.0),
-      ),
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
@@ -552,6 +600,27 @@ class _HomeTabState extends State<HomeTab> {
             ),
           ),
         ],
+      ),
+    );
+
+    return Semantics(
+      button: true,
+      label: tooltip ?? label,
+      child: Tooltip(
+        message: tooltip ?? 'Open $label in Trips',
+        child: Material(
+          color: AppColors.offWhite,
+          shape: RoundedRectangleBorder(
+            borderRadius: BorderRadius.circular(16.0),
+            side: const BorderSide(color: AppColors.dividerGrey, width: 1.0),
+          ),
+          clipBehavior: Clip.antiAlias,
+          child: InkWell(
+            onTap: onTap,
+            borderRadius: BorderRadius.circular(16.0),
+            child: child,
+          ),
+        ),
       ),
     );
   }
@@ -745,7 +814,7 @@ class _HomeTabState extends State<HomeTab> {
                 height: 52.0,
                 child: ElevatedButton(
                   onPressed: () async {
-                    await Navigator.of(context).pushNamed('/create-trip');
+                    await openCreateTripFlow(context);
                     if (!context.mounted) return;
                     final tripProvider =
                         Provider.of<TripProvider>(context, listen: false);
@@ -770,7 +839,7 @@ class _HomeTabState extends State<HomeTab> {
                       const SizedBox(width: 8.0),
                       Flexible(
                         child: Text(
-                          'Create Trip',
+                          AppCopy.newTrip,
                           overflow: TextOverflow.ellipsis,
                           maxLines: 1,
                           style: textTheme.labelLarge?.copyWith(

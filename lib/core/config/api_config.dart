@@ -7,8 +7,11 @@ class ApiConfig {
   /// Set this when real-time runs on a different host than REST (e.g. `https://ws.example.com`).
   static const String socketBaseUrlOverride = '';
 
-  /// Socket.IO path (must match server; default is `/socket.io`).
-  static const String socketPath = '/socket.io';
+  /// Socket.IO path (must match server [SOCKET_IO_PATH]; default `/socket.io`).
+  static const String socketPath = String.fromEnvironment(
+    'SOCKET_IO_PATH',
+    defaultValue: '/socket.io',
+  );
   
   // API Endpoints
   static const String register = '/auth/register';
@@ -21,6 +24,16 @@ class ApiConfig {
   static const String transporterProfile = '/transporters/profile';
   static const String transporterSetPin = '/transporters/set-pin';
   static const String transporterDashboard = '/transporters/dashboard';
+
+  /// Transporter / company-user support tickets (REST + Socket `support:*`).
+  static const String supportTickets = '/transporters/support/tickets';
+  static String supportTicketById(String id) => '/transporters/support/tickets/$id';
+  static String supportTicketMessages(String id) =>
+      '/transporters/support/tickets/$id/messages';
+  static String supportTicketRating(String id) =>
+      '/transporters/support/tickets/$id/rating';
+  static String supportMessageRead(String messageId) =>
+      '/transporters/support/messages/$messageId/read';
   
   // Driver endpoints
   static const String drivers = '/drivers';
@@ -32,8 +45,38 @@ class ApiConfig {
   // Vehicle endpoints
   static const String vehicles = '/vehicles';
   static String vehicleById(String id) => '/vehicles/$id';
+  static const String vehicleTypes = '/vehicle-types';
+  static const String vehicleTypeRequests = '/vehicle-type-requests';
+  static const String vehicleTypeRequestsMine = '/vehicle-type-requests/mine';
   static String vehicleAvailability(String id) => '/vehicles/$id/availability';
   static String vehicleDocuments(String id) => '/vehicles/$id/documents';
+
+  /// Vehicle availability marketplace (T2T posts)
+  static const String vehiclePosts = '/vehicle-posts';
+  static const String vehiclePostsMine = '/vehicle-posts/mine';
+  static String vehiclePostById(String id) => '/vehicle-posts/$id';
+  static String vehiclePostVehicles(String postId) => '/vehicle-posts/$postId/vehicles';
+
+  /// T2T vehicle booking / marketplace chat
+  static const String vehicleBookings = '/vehicle-bookings';
+  static const String vehicleBookingsConversations = '/vehicle-bookings/conversations';
+  static const String vehicleBookingsMine = '/vehicle-bookings/my-bookings';
+  static String vehicleBookingById(String id) => '/vehicle-bookings/$id';
+  static String vehicleBookingProposePrice(String id) => '/vehicle-bookings/$id/propose-price';
+  static String vehicleBookingAcceptProposal(String id) =>
+      '/vehicle-bookings/$id/accept-proposal';
+  static String vehicleBookingDeclineProposal(String id) =>
+      '/vehicle-bookings/$id/decline-proposal';
+  static String vehicleBookingAccept(String id) => '/vehicle-bookings/$id/accept';
+  static String vehicleBookingReject(String id) => '/vehicle-bookings/$id/reject';
+  static String vehicleBookingHideFromInbox(String id) =>
+      '/vehicle-bookings/$id/hide-from-inbox';
+  static const String messages = '/messages';
+  /// Multipart: fields `bookingId`, files field `files` (max 5).
+  static const String messagesUpload = '/messages/upload';
+  static String messagesBooking(String bookingId) => '/messages/booking/$bookingId';
+  static String messagesBookingReadAll(String bookingId) =>
+      '/messages/booking/$bookingId/read-all';
   
   // Trip endpoints
   static const String trips = '/trips';
@@ -45,6 +88,7 @@ class ApiConfig {
   static String tripMilestone(String id, int milestoneNumber) => '/trips/$id/milestones/$milestoneNumber';
   static String tripCurrentMilestone(String id) => '/trips/$id/current-milestone';
   static String tripTimeline(String id) => '/trips/$id/timeline';
+  static String tripLocationTrail(String id) => '/trips/$id/location-trail';
   static String tripPOD(String id) => '/trips/$id/pod';
   static String tripPODApprove(String id) => '/trips/$id/pod/approve';
   static String tripCloseWithoutPOD(String id) => '/trips/$id/close-without-pod';
@@ -59,6 +103,11 @@ class ApiConfig {
   static String tripAssignDriver(String id) => '/trips/$id/assign-driver';
   static String tripsByStatus(String status) => '/trips/status/$status';
   static String sharedTrip(String token) => '/trips/shared/$token';
+  static const String tripDrafts = '/trips/drafts';
+  static String tripDraftById(String id) => '/trips/drafts/$id';
+
+  // Transporter customer directory
+  static const String transporterCustomers = '/transporter-customers';
   
   // Fuel Card endpoints
   static const String fuelCards = '/fuel-cards';
@@ -97,17 +146,43 @@ class ApiConfig {
   static const String walletTransfer = '/wallets/transfer';
   static const String walletBanks = '/wallets/banks';
   
+  /// Google Maps **Web** key for Directions API. Override via `--dart-define=GOOGLE_MAPS_DIRECTIONS_KEY=...`
+  static const String googleMapsDirectionsKey = String.fromEnvironment(
+    'GOOGLE_MAPS_DIRECTIONS_KEY',
+    defaultValue: 'AIzaSyA6EcL6hrD0iQpwk6ETUQNSieeEBYUR1_U',
+  );
+
+  /// Roads API key (optional). Falls back to [googleMapsDirectionsKey] when empty.
+  static const String googleMapsRoadsKey = String.fromEnvironment(
+    'GOOGLE_MAPS_ROADS_KEY',
+    defaultValue: 'AIzaSyA6EcL6hrD0iQpwk6ETUQNSieeEBYUR1_U',
+  );
+
+  /// Distance Matrix API key (optional). Falls back to [googleMapsDirectionsKey] when empty.
+  static const String googleMapsDistanceMatrixKey = String.fromEnvironment(
+    'GOOGLE_MAPS_DISTANCE_MATRIX_KEY',
+    defaultValue: 'AIzaSyA6EcL6hrD0iQpwk6ETUQNSieeEBYUR1_U',
+  );
+
   // Timeout settings
   static const Duration connectTimeout = Duration(seconds: 30);
   static const Duration receiveTimeout = Duration(seconds: 30);
   static const Duration sendTimeout = Duration(seconds: 30);
 
+  /// REST API origin: [baseUrl] without trailing `/api` (safe for hosts like `api.example.com`).
+  static String get restOrigin {
+    var u = baseUrl.replaceAll(RegExp(r'/+$'), '');
+    u = u.replaceFirst(RegExp(r'/api/?$'), '');
+    return u.replaceAll(RegExp(r'/+$'), '');
+  }
+
   /// Origin for Socket.IO (scheme + host + port), no trailing slash.
+  /// Only strips a trailing `/api` path — never `replaceAll('/api')`, which breaks hosts like `api.example.com`.
   static String get effectiveSocketBaseUrl {
     final o = socketBaseUrlOverride.trim();
     if (o.isNotEmpty) {
       return o.replaceAll(RegExp(r'/+$'), '');
     }
-    return baseUrl.replaceAll('/api', '').replaceAll(RegExp(r'/+$'), '');
+    return restOrigin;
   }
 }

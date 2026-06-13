@@ -5,6 +5,8 @@ import '../core/utils/helpers.dart';
 import '../data/models/notification_model.dart';
 import '../providers/notification_provider.dart';
 import '../providers/navigation_state_provider.dart';
+import '../providers/marketplace_chat_provider.dart';
+import 'marketplace/marketplace_chat_screen.dart';
 
 class NotificationsScreen extends StatefulWidget {
   const NotificationsScreen({super.key});
@@ -25,8 +27,43 @@ class _NotificationsScreenState extends State<NotificationsScreen> {
     });
   }
 
-  void _onNotificationTap(NotificationModel notification) {
+  Future<void> _onNotificationTap(NotificationModel notification) async {
+    if (notification.isVehicleTypeDecision) {
+      Provider.of<NotificationProvider>(context, listen: false)
+          .markAsRead(notification.id);
+      if (!mounted) return;
+      Navigator.of(context).pop();
+      await Navigator.of(context).pushNamed('/add-vehicle');
+      return;
+    }
+
     final tripId = notification.tripId;
+    final bookingId = notification.bookingId;
+
+    if (notification.type == 'MARKETPLACE_MESSAGE' && bookingId != null) {
+      Provider.of<NotificationProvider>(context, listen: false)
+          .markAsRead(notification.id);
+      final senderName = notification.marketplaceSenderName;
+      final senderId = notification.marketplaceSenderId;
+      if (!mounted) return;
+      await Navigator.of(context).push<void>(
+        MaterialPageRoute<void>(
+          builder: (ctx) => MarketplaceChatScreen(
+            bookingId: bookingId,
+            counterpartyLabel:
+                (senderName != null && senderName.isNotEmpty)
+                    ? senderName
+                    : 'Transporter',
+            counterpartyTransporterId: senderId,
+          ),
+        ),
+      );
+      if (mounted) {
+        context.read<MarketplaceChatProvider>().loadConversations(silent: true);
+      }
+      return;
+    }
+
     if (tripId != null) {
       Provider.of<NotificationProvider>(context, listen: false)
           .markAsRead(notification.id);
@@ -94,7 +131,7 @@ class _NotificationsScreenState extends State<NotificationsScreen> {
                     ),
                     const SizedBox(height: 12.0),
                     Text(
-                      'You\'ll see notifications about new trip bookings and other updates here.',
+                      'You\'ll see notifications about new trip bookings, vehicle type approvals, and other updates here.',
                       style: textTheme.bodyMedium?.copyWith(
                         color: AppColors.textSecondary,
                       ),
@@ -125,6 +162,9 @@ class _NotificationsScreenState extends State<NotificationsScreen> {
 
   Widget _buildNotificationItem(NotificationModel n, TextTheme textTheme) {
     final hasTripLink = n.tripId != null;
+    final hasChatLink =
+        n.type == 'MARKETPLACE_MESSAGE' && n.bookingId != null;
+    final hasVehicleTypeLink = n.isVehicleTypeDecision;
 
     return InkWell(
       onTap: () => _onNotificationTap(n),
@@ -136,7 +176,7 @@ class _NotificationsScreenState extends State<NotificationsScreen> {
           crossAxisAlignment: CrossAxisAlignment.start,
           children: [
             Icon(
-              n.type == 'TRIP_BOOKED' ? Icons.inventory_2_outlined : Icons.notifications_outlined,
+              _notificationIcon(n.type),
               color: n.read ? AppColors.textMuted : AppColors.primary,
               size: 24.0,
             ),
@@ -177,6 +217,26 @@ class _NotificationsScreenState extends State<NotificationsScreen> {
                       ),
                     ),
                   ],
+                  if (hasChatLink) ...[
+                    const SizedBox(height: 8.0),
+                    Text(
+                      'Tap to open chat',
+                      style: textTheme.bodySmall?.copyWith(
+                        color: AppColors.primary,
+                        fontWeight: FontWeight.w600,
+                      ),
+                    ),
+                  ],
+                  if (hasVehicleTypeLink) ...[
+                    const SizedBox(height: 8.0),
+                    Text(
+                      'Tap to add a vehicle',
+                      style: textTheme.bodySmall?.copyWith(
+                        color: AppColors.primary,
+                        fontWeight: FontWeight.w600,
+                      ),
+                    ),
+                  ],
                 ],
               ),
             ),
@@ -184,5 +244,18 @@ class _NotificationsScreenState extends State<NotificationsScreen> {
         ),
       ),
     );
+  }
+
+  IconData _notificationIcon(String type) {
+    switch (type) {
+      case 'TRIP_BOOKED':
+        return Icons.inventory_2_outlined;
+      case 'VEHICLE_TYPE_APPROVED':
+        return Icons.check_circle_outline;
+      case 'VEHICLE_TYPE_REJECTED':
+        return Icons.cancel_outlined;
+      default:
+        return Icons.notifications_outlined;
+    }
   }
 }

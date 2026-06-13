@@ -26,6 +26,10 @@ String? _driverNameFromTripJson(Map<String, dynamic> json) {
   return _stringFieldFromMap(json['driverId'], 'name');
 }
 
+String? _driverMobileFromTripJson(Map<String, dynamic> json) {
+  return _stringFieldFromMap(json['driverId'], 'mobile');
+}
+
 String? _transporterDisplayNameFromTripJson(Map<String, dynamic> json) {
   final t = json['transporterId'];
   if (t is! Map) return null;
@@ -42,6 +46,52 @@ TripLocation? _parseTripLocation(dynamic value) {
     }
   }
   return null;
+}
+
+/// Server-driven flags for marketplace trips (`buyer` = read-only execution).
+class TripCapabilities {
+  final bool assignVehicle;
+  final bool assignDriver;
+  final bool updateTrip;
+  final bool cancelTrip;
+  final bool approvePod;
+  final bool startTrip;
+  final bool completeTrip;
+  final bool shareTrip;
+  final bool closeWithoutPod;
+
+  const TripCapabilities({
+    required this.assignVehicle,
+    required this.assignDriver,
+    required this.updateTrip,
+    required this.cancelTrip,
+    required this.approvePod,
+    required this.startTrip,
+    required this.completeTrip,
+    required this.shareTrip,
+    required this.closeWithoutPod,
+  });
+
+  /// API omitted [capabilities] → legacy / non-marketplace transporter (full control).
+  static TripCapabilities? fromJson(dynamic json) {
+    if (json == null || json is! Map) return null;
+    final m = Map<String, dynamic>.from(json);
+    bool b(String key, bool def) {
+      final v = m[key];
+      return v is bool ? v : def;
+    }
+    return TripCapabilities(
+      assignVehicle: b('assignVehicle', true),
+      assignDriver: b('assignDriver', true),
+      updateTrip: b('updateTrip', true),
+      cancelTrip: b('cancelTrip', true),
+      approvePod: b('approvePod', true),
+      startTrip: b('startTrip', true),
+      completeTrip: b('completeTrip', true),
+      shareTrip: b('shareTrip', true),
+      closeWithoutPod: b('closeWithoutPod', true),
+    );
+  }
 }
 
 List<TripAssignment>? _parseAssignments(dynamic data) {
@@ -92,6 +142,29 @@ class TripAssignment {
   }
 }
 
+/// Last GPS fix persisted on the server for ACTIVE trips (seed map before next socket tick).
+class LastDriverLocation {
+  final double latitude;
+  final double longitude;
+  final DateTime? updatedAt;
+
+  LastDriverLocation({
+    required this.latitude,
+    required this.longitude,
+    this.updatedAt,
+  });
+
+  static LastDriverLocation? fromJson(dynamic value) {
+    if (value == null || value is! Map) return null;
+    final m = Map<String, dynamic>.from(value);
+    return LastDriverLocation(
+      latitude: JsonParser.extractDouble(m['latitude'], 0),
+      longitude: JsonParser.extractDouble(m['longitude'], 0),
+      updatedAt: JsonParser.extractDateTime(m['updatedAt']),
+    );
+  }
+}
+
 class TripModel {
   final String id;
   final String tripId;
@@ -102,13 +175,14 @@ class TripModel {
   final String? driverId;
   final String? vehicleNumber;
   final String? driverName;
+  final String? driverMobile;
   final String? transporterName;
   final String? containerNumber;
   final List<TripAssignment>? assignments;
   final String? reference;
   final TripLocation? pickupLocation;
   final TripLocation? dropLocation;
-  final String tripType; // IMPORT or EXPORT
+  final String tripType; // IMPORT, EXPORT, or LOCAL
   final String status; // PLANNED, ACTIVE, COMPLETED, POD_PENDING, CANCELLED
   final List<MilestoneModel> milestones;
   final PODModel? pod;
@@ -117,6 +191,15 @@ class TripModel {
   final DateTime createdAt;
   final DateTime updatedAt;
   final DateTime? podDueAt;
+  final LastDriverLocation? lastDriverLocation;
+  /// True when this trip was created from a marketplace vehicle booking (API: isFromBooking).
+  final bool isFromBooking;
+  /// `buyer` | `seller` when this trip is from a marketplace booking.
+  final String? marketplaceRole;
+  final TripCapabilities? capabilities;
+  final int? queuePosition;
+  final bool isQueued;
+  final String? blockingTripId;
 
   TripModel({
     required this.id,
@@ -128,6 +211,7 @@ class TripModel {
     this.driverId,
     this.vehicleNumber,
     this.driverName,
+    this.driverMobile,
     this.transporterName,
     this.containerNumber,
     this.assignments,
@@ -143,7 +227,98 @@ class TripModel {
     required this.createdAt,
     required this.updatedAt,
     this.podDueAt,
+    this.lastDriverLocation,
+    this.isFromBooking = false,
+    this.marketplaceRole,
+    this.capabilities,
+    this.queuePosition,
+    this.isQueued = false,
+    this.blockingTripId,
   });
+
+  bool get isQueuedBlocked => isQueued && (queuePosition ?? 0) > 1;
+
+  bool get canAssignVehicle => capabilities?.assignVehicle ?? true;
+  bool get canAssignDriver => capabilities?.assignDriver ?? true;
+  bool get canUpdateTrip => capabilities?.updateTrip ?? true;
+  bool get canCancelTrip => capabilities?.cancelTrip ?? true;
+  bool get canApprovePod => capabilities?.approvePod ?? true;
+  bool get canStartTrip => capabilities?.startTrip ?? true;
+  bool get canCompleteTrip => capabilities?.completeTrip ?? true;
+  bool get canShareTrip => capabilities?.shareTrip ?? true;
+  bool get canCloseWithoutPod => capabilities?.closeWithoutPod ?? true;
+  bool get isMarketplaceBuyerView => marketplaceRole == 'buyer';
+  bool get isMarketplaceBookingTrip => isFromBooking || marketplaceRole != null;
+
+  TripModel copyWith({
+    String? id,
+    String? tripId,
+    String? transporterId,
+    String? customerId,
+    String? customerName,
+    String? vehicleId,
+    String? driverId,
+    String? vehicleNumber,
+    String? driverName,
+    String? driverMobile,
+    String? transporterName,
+    String? containerNumber,
+    List<TripAssignment>? assignments,
+    String? reference,
+    TripLocation? pickupLocation,
+    TripLocation? dropLocation,
+    String? tripType,
+    String? status,
+    List<MilestoneModel>? milestones,
+    PODModel? pod,
+    String? shareToken,
+    DateTime? shareTokenExpiry,
+    DateTime? createdAt,
+    DateTime? updatedAt,
+    DateTime? podDueAt,
+    LastDriverLocation? lastDriverLocation,
+    bool? isFromBooking,
+    String? marketplaceRole,
+    TripCapabilities? capabilities,
+    int? queuePosition,
+    bool? isQueued,
+    String? blockingTripId,
+  }) {
+    return TripModel(
+      id: id ?? this.id,
+      tripId: tripId ?? this.tripId,
+      transporterId: transporterId ?? this.transporterId,
+      customerId: customerId ?? this.customerId,
+      customerName: customerName ?? this.customerName,
+      vehicleId: vehicleId ?? this.vehicleId,
+      driverId: driverId ?? this.driverId,
+      vehicleNumber: vehicleNumber ?? this.vehicleNumber,
+      driverName: driverName ?? this.driverName,
+      driverMobile: driverMobile ?? this.driverMobile,
+      transporterName: transporterName ?? this.transporterName,
+      containerNumber: containerNumber ?? this.containerNumber,
+      assignments: assignments ?? this.assignments,
+      reference: reference ?? this.reference,
+      pickupLocation: pickupLocation ?? this.pickupLocation,
+      dropLocation: dropLocation ?? this.dropLocation,
+      tripType: tripType ?? this.tripType,
+      status: status ?? this.status,
+      milestones: milestones ?? this.milestones,
+      pod: pod ?? this.pod,
+      shareToken: shareToken ?? this.shareToken,
+      shareTokenExpiry: shareTokenExpiry ?? this.shareTokenExpiry,
+      createdAt: createdAt ?? this.createdAt,
+      updatedAt: updatedAt ?? this.updatedAt,
+      podDueAt: podDueAt ?? this.podDueAt,
+      lastDriverLocation: lastDriverLocation ?? this.lastDriverLocation,
+      isFromBooking: isFromBooking ?? this.isFromBooking,
+      marketplaceRole: marketplaceRole ?? this.marketplaceRole,
+      capabilities: capabilities ?? this.capabilities,
+      queuePosition: queuePosition ?? this.queuePosition,
+      isQueued: isQueued ?? this.isQueued,
+      blockingTripId: blockingTripId ?? this.blockingTripId,
+    );
+  }
 
   factory TripModel.fromJson(Map<String, dynamic> json) {
     final customerIdData = json['customerId'];
@@ -151,6 +326,8 @@ class TripModel {
     if (customerIdData is Map && customerIdData['name'] != null) {
       customerName = customerIdData['name']?.toString();
     }
+    final isFromBookingFlag = json['isFromBooking'] == true ||
+        json['isFromBooking']?.toString().toLowerCase() == 'true';
     return TripModel(
       id: JsonParser.extractString(json['_id'] ?? json['id'], ''),
       tripId: JsonParser.extractString(json['tripId'], ''),
@@ -161,6 +338,7 @@ class TripModel {
       driverId: JsonParser.extractId(json['driverId']),
       vehicleNumber: _vehicleNumberFromTripJson(json),
       driverName: _driverNameFromTripJson(json),
+      driverMobile: _driverMobileFromTripJson(json),
       transporterName: _transporterDisplayNameFromTripJson(json),
       containerNumber: json['containerNumber']?.toString(),
       assignments: _parseAssignments(json['assignments']),
@@ -179,6 +357,16 @@ class TripModel {
       createdAt: JsonParser.extractDateTime(json['createdAt']) ?? DateTime.now(),
       updatedAt: JsonParser.extractDateTime(json['updatedAt']) ?? DateTime.now(),
       podDueAt: JsonParser.extractDateTime(json['podDueAt']),
+      lastDriverLocation: LastDriverLocation.fromJson(json['lastDriverLocation']),
+      isFromBooking: isFromBookingFlag,
+      marketplaceRole: json['marketplaceRole']?.toString(),
+      capabilities: TripCapabilities.fromJson(json['capabilities']),
+      queuePosition: json['queuePosition'] is num
+          ? (json['queuePosition'] as num).toInt()
+          : int.tryParse(json['queuePosition']?.toString() ?? ''),
+      isQueued: json['isQueued'] == true ||
+          json['isQueued']?.toString().toLowerCase() == 'true',
+      blockingTripId: JsonParser.extractId(json['blockingTripId']),
     );
   }
 
@@ -198,16 +386,20 @@ class TripModel {
 class TripLocation {
   final String? address;
   final LocationCoordinates coordinates;
+  final String? countryCode;
 
   TripLocation({
     this.address,
     required this.coordinates,
+    this.countryCode,
   });
 
   factory TripLocation.fromJson(Map<String, dynamic> json) {
     return TripLocation(
-      address: json['address'],
-      coordinates: LocationCoordinates.fromJson(json['coordinates'] ?? {}),
+      address: json['address']?.toString() ??
+          json['formattedAddress']?.toString(),
+      coordinates: LocationCoordinates.fromJson(json['coordinates']),
+      countryCode: json['countryCode']?.toString().toUpperCase(),
     );
   }
 
@@ -215,6 +407,24 @@ class TripLocation {
     return {
       'address': address,
       'coordinates': coordinates.toJson(),
+      if (countryCode != null && countryCode!.isNotEmpty)
+        'countryCode': countryCode,
+    };
+  }
+
+  /// GeoJSON-shaped body for `POST/PUT /vehicle-posts` ([normalizeLocationInput] on API).
+  /// Returns null if address is empty or coordinates are unset (0,0) or out of range.
+  Map<String, dynamic>? toVehiclePostLocationPayload() {
+    final addr = (address ?? '').trim();
+    if (addr.isEmpty) return null;
+    final lat = coordinates.latitude;
+    final lng = coordinates.longitude;
+    if (lng == 0 && lat == 0) return null;
+    if (lat < -90 || lat > 90 || lng < -180 || lng > 180) return null;
+    return {
+      'type': 'Point',
+      'formattedAddress': addr,
+      'coordinates': [lng, lat],
     };
   }
 }
@@ -228,11 +438,27 @@ class LocationCoordinates {
     required this.longitude,
   });
 
-  factory LocationCoordinates.fromJson(Map<String, dynamic> json) {
-    return LocationCoordinates(
-      latitude: JsonParser.extractDouble(json['latitude'], 0.0),
-      longitude: JsonParser.extractDouble(json['longitude'], 0.0),
-    );
+  /// API GeoJSON Point uses `coordinates: [longitude, latitude]`; milestones use `{ latitude, longitude }`.
+  factory LocationCoordinates.fromJson(dynamic json) {
+    if (json == null) {
+      return LocationCoordinates(latitude: 0, longitude: 0);
+    }
+    if (json is List) {
+      if (json.length >= 2) {
+        final lng = (json[0] as num).toDouble();
+        final lat = (json[1] as num).toDouble();
+        return LocationCoordinates(latitude: lat, longitude: lng);
+      }
+      return LocationCoordinates(latitude: 0, longitude: 0);
+    }
+    if (json is Map) {
+      final m = Map<String, dynamic>.from(json);
+      return LocationCoordinates(
+        latitude: JsonParser.extractDouble(m['latitude'], 0.0),
+        longitude: JsonParser.extractDouble(m['longitude'], 0.0),
+      );
+    }
+    return LocationCoordinates(latitude: 0, longitude: 0);
   }
 
   Map<String, dynamic> toJson() {

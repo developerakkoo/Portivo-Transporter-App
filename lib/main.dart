@@ -1,18 +1,25 @@
 import 'package:flutter/material.dart';
 import 'package:flutter/foundation.dart';
 import 'package:provider/provider.dart';
+import 'package:google_maps_flutter_android/google_maps_flutter_android.dart';
+import 'package:google_maps_flutter_platform_interface/google_maps_flutter_platform_interface.dart';
 import 'core/theme/app_theme.dart';
+import 'core/config/app_flags.dart';
 import 'services/storage_service.dart';
 import 'providers/auth_provider.dart';
 import 'providers/trip_provider.dart';
 import 'providers/notification_provider.dart';
 import 'providers/navigation_state_provider.dart';
 import 'providers/vehicle_provider.dart';
+import 'providers/vehicle_type_provider.dart';
+import 'providers/customer_provider.dart';
 import 'providers/driver_provider.dart';
 import 'providers/fuel_provider.dart';
 import 'providers/wallet_provider.dart';
 import 'providers/company_user_provider.dart';
 import 'providers/pinned_trips_provider.dart';
+import 'providers/marketplace_chat_provider.dart';
+import 'providers/support_provider.dart';
 import 'screens/splash_screen.dart';
 import 'screens/login.dart';
 import 'screens/register.dart';
@@ -35,11 +42,26 @@ import 'screens/notifications.dart';
 import 'screens/support.dart';
 import 'screens/trip_detail.dart';
 import 'screens/map_screen.dart';
+import 'screens/marketplace/marketplace_screen.dart';
+import 'screens/dev/live_tracking_sandbox_screen.dart';
 
-void main() async {
+Future<void> main() async {
+  await _runBootstrap();
+}
+
+Future<void> _runBootstrap() async {
   WidgetsFlutterBinding.ensureInitialized();
-  
-  // Setup global error handling
+
+  // Force Google Maps to use the hybrid-composition (AndroidView surface) path.
+  // The default Texture Layer path uses an ImageReader that races on the GPU
+  // fence on Android < 33, causing "Image is already closed" raster-thread
+  // crashes (SIGABRT) when the map view is mounted/unmounted or hot-reloaded.
+  final GoogleMapsFlutterPlatform mapsImplementation =
+      GoogleMapsFlutterPlatform.instance;
+  if (mapsImplementation is GoogleMapsFlutterAndroid) {
+    mapsImplementation.useAndroidViewSurface = true;
+  }
+
   FlutterError.onError = (FlutterErrorDetails details) {
     FlutterError.presentError(details);
     if (kDebugMode) {
@@ -121,21 +143,18 @@ void main() async {
     );
   };
 
-  // Handle async errors
   PlatformDispatcher.instance.onError = (error, stack) {
     if (kDebugMode) {
       print('Async Error: $error');
       print('Stack: $stack');
-      
-      // Check for authentication errors
+
       if (error.toString().contains('authorization') ||
           error.toString().contains('token') ||
           error.toString().contains('401') ||
           error.toString().contains('403')) {
         print('Async Error: Authentication issue detected');
       }
-      
-      // Check for network errors
+
       if (error.toString().contains('network') ||
           error.toString().contains('connection') ||
           error.toString().contains('timeout')) {
@@ -145,7 +164,6 @@ void main() async {
     return true;
   };
 
-  // Initialize storage service with error handling
   try {
     await StorageService().init();
     if (kDebugMode) {
@@ -158,7 +176,7 @@ void main() async {
     }
     // Continue anyway - storage might work partially
   }
-  
+
   runApp(const MyApp());
 }
 
@@ -195,6 +213,26 @@ class MyApp extends StatelessWidget {
           } catch (e) {
             if (kDebugMode) {
               print('Error creating VehicleProvider: $e');
+            }
+            rethrow;
+          }
+        }),
+        ChangeNotifierProvider(create: (_) {
+          try {
+            return VehicleTypeProvider();
+          } catch (e) {
+            if (kDebugMode) {
+              print('Error creating VehicleTypeProvider: $e');
+            }
+            rethrow;
+          }
+        }),
+        ChangeNotifierProvider(create: (_) {
+          try {
+            return CustomerProvider();
+          } catch (e) {
+            if (kDebugMode) {
+              print('Error creating CustomerProvider: $e');
             }
             rethrow;
           }
@@ -251,6 +289,26 @@ class MyApp extends StatelessWidget {
         }),
         ChangeNotifierProvider(create: (_) {
           try {
+            return MarketplaceChatProvider();
+          } catch (e) {
+            if (kDebugMode) {
+              print('Error creating MarketplaceChatProvider: $e');
+            }
+            rethrow;
+          }
+        }),
+        ChangeNotifierProvider(create: (_) {
+          try {
+            return SupportProvider();
+          } catch (e) {
+            if (kDebugMode) {
+              print('Error creating SupportProvider: $e');
+            }
+            rethrow;
+          }
+        }),
+        ChangeNotifierProvider(create: (_) {
+          try {
             return NavigationStateProvider();
           } catch (e) {
             if (kDebugMode) {
@@ -274,8 +332,10 @@ class MyApp extends StatelessWidget {
         debugShowCheckedModeBanner: false,
         title: 'Prottivo Transporter',
         theme: AppTheme.lightTheme(),
-        initialRoute: '/splash',
+        initialRoute: AppFlags.trackingSandbox ? '/' : '/splash',
         routes: {
+          if (AppFlags.trackingSandbox)
+            '/': (context) => const LiveTrackingSandboxScreen(),
           '/splash': (context) => const SplashScreen(),
           '/login': (context) => const LoginScreen(),
           '/register': (context) => const RegisterScreen(),
@@ -287,7 +347,12 @@ class MyApp extends StatelessWidget {
           },
           '/pin-login': (context) => const PinLoginScreen(),
           '/home': (context) => const MainScaffold(),
-          '/create-trip': (context) => const CreateTripScreen(),
+          '/create-trip': (context) {
+            final args = ModalRoute.of(context)?.settings.arguments;
+            return CreateTripScreen(
+              draftId: args is String ? args : null,
+            );
+          },
           '/search-vehicle': (context) => const SearchVehicleScreen(),
           '/search-customer': (context) => const SearchCustomerScreen(),
           '/wallet': (context) => const WalletScreen(),
@@ -304,9 +369,10 @@ class MyApp extends StatelessWidget {
             return AddEditVehicleScreen(vehicleId: args is String ? args : null);
           },
           '/notifications': (context) => const NotificationsScreen(),
-          '/support': (context) => const SupportScreen(),
+          '/support': (context) => const SupportHubScreen(),
           '/trip-detail': (context) => const TripDetailScreen(),
           '/map': (context) => const MapScreen(),
+          '/marketplace': (context) => const MarketplaceScreen(),
         },
       ),
     );

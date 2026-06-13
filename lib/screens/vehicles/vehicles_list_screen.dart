@@ -89,6 +89,7 @@ class _VehiclesListScreenState extends State<VehiclesListScreen> {
               ? vehicles
               : vehicles.where((v) =>
                   v.vehicleNumber.toLowerCase().contains(query) ||
+                  (v.vehicleType?.toLowerCase().contains(query) ?? false) ||
                   (v.trailerType?.toLowerCase().contains(query) ?? false)).toList();
 
           if (isLoading && vehicles.isEmpty) {
@@ -257,7 +258,15 @@ class _VehiclesListScreenState extends State<VehiclesListScreen> {
                         ),
                         const SizedBox(height: 4.0),
                         Text(
-                          '${vehicle.ownerType}${vehicle.trailerType != null ? ' • ${vehicle.trailerType}' : ''}',
+                          [
+                            vehicle.ownerType,
+                            if (vehicle.vehicleType != null &&
+                                vehicle.vehicleType!.isNotEmpty)
+                              vehicle.vehicleType,
+                            if (vehicle.trailerType != null &&
+                                vehicle.trailerType!.isNotEmpty)
+                              vehicle.trailerType,
+                          ].join(' • '),
                           style: textTheme.bodySmall?.copyWith(
                             color: AppColors.textSecondary,
                           ),

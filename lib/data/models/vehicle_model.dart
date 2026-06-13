@@ -10,6 +10,7 @@ class VehicleModel {
   final String? driverId;
   final String status;
   final String? trailerType;
+  final String? vehicleType;
   final VehicleDocuments? documents;
   final DateTime createdAt;
   final DateTime updatedAt;
@@ -24,6 +25,7 @@ class VehicleModel {
     this.driverId,
     required this.status,
     this.trailerType,
+    this.vehicleType,
     this.documents,
     required this.createdAt,
     required this.updatedAt,
@@ -42,6 +44,9 @@ class VehicleModel {
       trailerType: json['trailerType'] is String 
           ? json['trailerType'] as String?
           : json['trailerType']?.toString(),
+      vehicleType: json['vehicleType'] is String
+          ? json['vehicleType'] as String?
+          : json['vehicleType']?.toString(),
       documents: json['documents'] != null && json['documents'] is Map
           ? VehicleDocuments.fromJson(json['documents'] as Map<String, dynamic>)
           : null,
@@ -55,6 +60,7 @@ class VehicleModel {
       'vehicleNumber': vehicleNumber,
       'ownerType': ownerType,
       'trailerType': trailerType,
+      if (vehicleType != null && vehicleType!.isNotEmpty) 'vehicleType': vehicleType,
       'driverId': driverId,
     };
   }

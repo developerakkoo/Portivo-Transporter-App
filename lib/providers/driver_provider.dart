@@ -17,7 +17,10 @@ class DriverProvider with ChangeNotifier {
   bool get isLoading => _isLoading;
   String? get error => _error;
 
-  Future<void> loadDrivers({bool refresh = false}) async {
+  Future<void> loadDrivers({
+    bool availableForTrip = false,
+    bool refresh = false,
+  }) async {
     if (!refresh && _drivers.isNotEmpty) return;
 
     _isLoading = true;
@@ -31,7 +34,10 @@ class DriverProvider with ChangeNotifier {
         return;
       }
 
-      final drivers = await _driverService.getDriversByTransporter(transporterId);
+      final drivers = await _driverService.getDriversByTransporter(
+        transporterId,
+        availableForTrip: availableForTrip,
+      );
 
       if (refresh) {
         _drivers = drivers;

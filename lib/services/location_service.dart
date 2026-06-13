@@ -6,14 +6,21 @@ import 'package:google_places_autocomplete/google_places_autocomplete.dart';
 
 import '../core/config/maps_config.dart';
 import '../data/models/trip_model.dart';
+import 'search_region_context.dart';
 
 /// Service for location search (Places Autocomplete) and reverse geocoding.
+///
+/// Uses [google_places_autocomplete] (native Places SDK). Session tokens are
+/// handled by the package. Call [configureForRegion] once before showing the map.
 class LocationService {
   GooglePlacesAutocomplete? _places;
   final _predictionsController = StreamController<List<Prediction>>.broadcast();
   final _loadingController = StreamController<bool>.broadcast();
   final _searchErrorController = StreamController<String?>.broadcast();
   bool _isInitialized = false;
+  bool _isDisposed = false;
+  List<String>? _lastCountryCodes;
+  Future<void>? _pendingConfigure;
 
   /// Stream of place predictions from search results.
   Stream<List<Prediction>> get predictions => _predictionsController.stream;
@@ -24,83 +31,36 @@ class LocationService {
   /// User-visible search / Places errors (null to clear).
   Stream<String?> get searchError => _searchErrorController.stream;
 
-  /// Whether the Places client has been initialized.
-  bool get isInitialized => _isInitialized;
+  /// Whether the Places client has been successfully configured.
+  bool get isInitialized => _isInitialized && !_isDisposed;
 
-  static const List<String> _countriesIn = ['in'];
+  bool get isDisposed => _isDisposed;
 
-  /// Initialize the Places client. Call once before use.
-  ///
-  /// When [biasSearchToOrigin] is **false** (default, port-to-port / India-wide): no origin is
-  /// passed and ranking is not biased to device or a fallback city.
-  ///
-  /// When **true** ("near me"): [originLat]/[originLng] and optional [fallbackOriginLat]/[fallbackOriginLng]
-  /// bias ranking toward that region.
-  Future<void> initialize({
-    double? originLat,
-    double? originLng,
-    double? fallbackOriginLat,
-    double? fallbackOriginLng,
-    bool biasSearchToOrigin = false,
-  }) async {
-    if (_isInitialized) return;
+  void _emitPredictions(List<Prediction> predictions) {
+    if (_isDisposed || _predictionsController.isClosed) return;
+    _predictionsController.add(predictions);
+  }
 
-    double? lat;
-    double? lng;
-    if (biasSearchToOrigin) {
-      lat = originLat ?? fallbackOriginLat;
-      lng = originLng ?? fallbackOriginLng;
-    }
+  void _emitLoading(bool isLoading) {
+    if (_isDisposed || _loadingController.isClosed) return;
+    _loadingController.add(isLoading);
+  }
 
-    _places = GooglePlacesAutocomplete(
-      debounceTime: 300,
-      countries: _countriesIn,
-      originLat: lat,
-      originLng: lng,
-      predictionsListener: (predictions) {
-        if (!_predictionsController.isClosed) {
-          if (predictions.isNotEmpty) {
-            _clearSearchError();
-          }
-          _predictionsController.add(predictions);
-        }
-      },
-      loadingListener: (isLoading) {
-        if (!_loadingController.isClosed) {
-          _loadingController.add(isLoading);
-        }
-      },
-      onError: _handlePlacesError,
-    );
-
-    try {
-      await _places!.initialize(
-        apiKey: mapsApiKey.isNotEmpty ? mapsApiKey : null,
-      );
-      if (!biasSearchToOrigin) {
-        _places?.clearOrigin();
-      }
-      _isInitialized = _places?.isInitialized ?? false;
-    } catch (e) {
-      if (kDebugMode) {
-        print('LocationService init failed: $e');
-      }
-      rethrow;
-    }
+  void _emitSearchError(String? message) {
+    if (_isDisposed || _searchErrorController.isClosed) return;
+    _searchErrorController.add(message);
   }
 
   void _clearSearchError() {
-    if (!_searchErrorController.isClosed) {
-      _searchErrorController.add(null);
-    }
+    _emitSearchError(null);
   }
 
   void _handlePlacesError(PlacesException error) {
+    if (_isDisposed) return;
     if (kDebugMode) {
       print('LocationService Places error: ${error.code} - ${error.message}');
     }
-    if (_searchErrorController.isClosed) return;
-    _searchErrorController.add(_mapPlacesExceptionToMessage(error));
+    _emitSearchError(_mapPlacesExceptionToMessage(error));
   }
 
   String _mapPlacesExceptionToMessage(PlacesException error) {
@@ -130,10 +90,88 @@ class LocationService {
         : 'Could not complete search. Try again.';
   }
 
+  void _attachPredictionsClient(SearchRegionContext ctx) {
+    if (_isDisposed) return;
+    _places?.dispose();
+    _places = GooglePlacesAutocomplete(
+      debounceTime: 300,
+      countries: ctx.countryCodes,
+      originLat: ctx.latitude,
+      originLng: ctx.longitude,
+      predictionsListener: (predictions) {
+        if (_isDisposed) return;
+        if (predictions.isNotEmpty) {
+          _clearSearchError();
+        }
+        _emitPredictions(predictions);
+      },
+      loadingListener: (isLoading) {
+        if (_isDisposed) return;
+        _emitLoading(isLoading);
+      },
+      onError: _handlePlacesError,
+    );
+  }
+
+  /// Configure Places for [ctx]. Recreates the native client only when the
+  /// country filter changes. Call once before rendering GoogleMap.
+  Future<void> configureForRegion(SearchRegionContext ctx) async {
+    if (_isDisposed) return;
+
+    final configure = _configureForRegionImpl(ctx);
+    _pendingConfigure = configure;
+    try {
+      await configure;
+    } finally {
+      if (identical(_pendingConfigure, configure)) {
+        _pendingConfigure = null;
+      }
+    }
+  }
+
+  Future<void> _configureForRegionImpl(SearchRegionContext ctx) async {
+    if (_isDisposed) return;
+
+    final needRecreate =
+        !_isInitialized || !_sameCountryCodes(_lastCountryCodes, ctx.countryCodes);
+
+    _lastCountryCodes = ctx.countryCodes == null
+        ? null
+        : List<String>.from(ctx.countryCodes!);
+
+    if (needRecreate) {
+      _attachPredictionsClient(ctx);
+      if (_isDisposed || _places == null) return;
+      try {
+        await _places!.initialize(
+          apiKey: mapsApiKey.isNotEmpty ? mapsApiKey : null,
+        );
+        if (_isDisposed) return;
+        _isInitialized = _places?.isInitialized ?? false;
+      } catch (e) {
+        if (kDebugMode) {
+          print('LocationService configure failed: $e');
+        }
+        _isInitialized = false;
+        rethrow;
+      }
+    } else {
+      if (_isDisposed) return;
+      if (ctx.hasApproxLocation) {
+        _places?.setOrigin(
+          latitude: ctx.latitude!,
+          longitude: ctx.longitude!,
+        );
+      } else {
+        _places?.clearOrigin();
+      }
+    }
+  }
+
   /// Search for places matching [query]. Results arrive via [predictions] stream.
   void searchPlaces(String query) {
-    if (!_isInitialized || query.trim().isEmpty) {
-      _predictionsController.add([]);
+    if (_isDisposed || !_isInitialized || query.trim().isEmpty) {
+      _emitPredictions([]);
       return;
     }
     _places?.getPredictions(query.trim());
@@ -141,34 +179,30 @@ class LocationService {
 
   /// Clear any pending predictions and search errors.
   void clearPredictions() {
-    _predictionsController.add([]);
+    if (_isDisposed) return;
+    _emitPredictions([]);
     _clearSearchError();
     _places?.clearQueue();
   }
 
   /// Get place details by [placeId]. Returns TripLocation with address and coordinates.
   Future<TripLocation?> getPlaceDetails(String placeId) async {
-    if (!_isInitialized) return null;
+    if (_isDisposed || !_isInitialized) return null;
 
     try {
       final details = await _places!.getPlaceDetails(placeId);
+      if (_isDisposed) return null;
       if (details == null) {
-        if (!_searchErrorController.isClosed) {
-          _searchErrorController.add(
-            'Could not load place details. Try another result.',
-          );
-        }
+        _emitSearchError('Could not load place details. Try another result.');
         return null;
       }
 
       final lat = details.location?.lat;
       final lng = details.location?.lng;
       if (lat == null || lng == null) {
-        if (!_searchErrorController.isClosed) {
-          _searchErrorController.add(
-            'Could not load coordinates for this place. Try another result.',
-          );
-        }
+        _emitSearchError(
+          'Could not load coordinates for this place. Try another result.',
+        );
         return null;
       }
 
@@ -184,18 +218,20 @@ class LocationService {
       if (kDebugMode) {
         print('LocationService getPlaceDetails failed: $e');
       }
-      if (!_searchErrorController.isClosed) {
-        _searchErrorController.add('Could not load place details. Try again.');
+      if (!_isDisposed) {
+        _emitSearchError('Could not load place details. Try again.');
       }
       return null;
     }
   }
 
   /// Reverse geocode coordinates to address. Returns formatted address or null.
+  /// Does not require Places SDK initialization.
   Future<String?> reverseGeocode(double lat, double lng) async {
+    if (_isDisposed) return null;
     try {
       final placemarks = await placemarkFromCoordinates(lat, lng);
-      if (placemarks.isEmpty) return null;
+      if (_isDisposed || placemarks.isEmpty) return null;
 
       final p = placemarks.first;
       final parts = <String>[];
@@ -219,18 +255,38 @@ class LocationService {
     }
   }
 
-  /// Update user origin for distance / ranking in predictions (approximates local bias).
+  /// Update user origin for distance / ranking (same restriction as last configure).
   void setOrigin({required double latitude, required double longitude}) {
+    if (_isDisposed) return;
     _places?.setOrigin(latitude: latitude, longitude: longitude);
   }
 
-  /// Dispose resources.
+  /// Dispose resources. Safe to call while [configureForRegion] is in flight.
+  static bool _sameCountryCodes(List<String>? a, List<String>? b) {
+    if (a == null && b == null) return true;
+    if (a == null || b == null) return false;
+    if (a.length != b.length) return false;
+    for (var i = 0; i < a.length; i++) {
+      if (a[i] != b[i]) return false;
+    }
+    return true;
+  }
+
   void dispose() {
-    _predictionsController.close();
-    _loadingController.close();
-    _searchErrorController.close();
+    if (_isDisposed) return;
+    _isDisposed = true;
+    _isInitialized = false;
+    _lastCountryCodes = null;
     _places?.dispose();
     _places = null;
-    _isInitialized = false;
+    if (!_predictionsController.isClosed) {
+      _predictionsController.close();
+    }
+    if (!_loadingController.isClosed) {
+      _loadingController.close();
+    }
+    if (!_searchErrorController.isClosed) {
+      _searchErrorController.close();
+    }
   }
 }

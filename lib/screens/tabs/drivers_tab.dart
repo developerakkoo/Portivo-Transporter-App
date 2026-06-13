@@ -105,6 +105,7 @@ class _DriversTabState extends State<DriversTab> {
               // Only show "Add Driver" button if user has manageDrivers permission or is transporter
               if (permissionService.hasPermission('manageDrivers') || permissionService.isTransporter) {
                 return FloatingActionButton(
+                  heroTag: 'fab_drivers_add',
                   onPressed: () {
                     Navigator.of(context).pushNamed('/add-driver').then((result) {
                       if (result == true) {

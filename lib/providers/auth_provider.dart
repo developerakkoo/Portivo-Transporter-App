@@ -2,6 +2,7 @@ import 'package:flutter/foundation.dart';
 import '../data/models/auth_response_model.dart';
 import '../services/auth_service.dart';
 import '../services/company_user_service.dart';
+import '../services/marketplace_message_cache.dart';
 import '../services/socket_service.dart';
 import '../services/transporter_service.dart';
 import '../utils/error_utils.dart';
@@ -60,6 +61,9 @@ class AuthProvider with ChangeNotifier {
     _user = null;
     _isAuthenticated = false;
     try {
+      await MarketplaceMessageCache.instance.clearAll();
+    } catch (_) {}
+    try {
       await _authService.logout();
     } catch (_) {}
   }
@@ -96,6 +100,7 @@ class AuthProvider with ChangeNotifier {
         userType: 'transporter',
         status: transporter.status,
         hasAccess: transporter.hasAccess,
+        operatingCountry: transporter.operatingCountry,
       );
       if (kDebugMode) {
         print('AuthProvider: User from transporter profile — ${_user!.id}');
@@ -145,7 +150,21 @@ class AuthProvider with ChangeNotifier {
     }
   }
 
-  Future<bool> register(String mobile, String name, String email, String company) async {
+  String? get operatingCountry => _user?.operatingCountry;
+
+  void updateOperatingCountry(String countryCode) {
+    if (_user == null) return;
+    _user = _user!.copyWith(operatingCountry: countryCode.toUpperCase());
+    notifyListeners();
+  }
+
+  Future<bool> register(
+    String mobile,
+    String name,
+    String email,
+    String company,
+    String operatingCountry,
+  ) async {
     _isLoading = true;
     _error = null;
     notifyListeners();
@@ -155,7 +174,13 @@ class AuthProvider with ChangeNotifier {
         print('AuthProvider: Attempting registration for mobile: $mobile');
       }
       
-      final response = await _authService.register(mobile, name, email, company);
+      final response = await _authService.register(
+        mobile,
+        name,
+        email,
+        company,
+        operatingCountry,
+      );
       
       if (response.success && response.data != null) {
         _user = response.data!.user;
@@ -342,6 +367,13 @@ class AuthProvider with ChangeNotifier {
     try {
       if (kDebugMode) {
         print('AuthProvider: Logging out');
+      }
+      final u = _user;
+      if (u != null) {
+        final actorId = u.transporterId ?? u.id;
+        try {
+          await MarketplaceMessageCache.instance.clearAllForActor(actorId);
+        } catch (_) {}
       }
       await _authService.logout();
       _socketService.clearJoinedRooms();

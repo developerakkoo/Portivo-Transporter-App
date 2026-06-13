@@ -55,6 +55,8 @@ dependencies:
   
   # Maps
   google_maps_flutter: ^2.15.0
+  google_maps_flutter_android: ^2.16.0
+  google_maps_flutter_platform_interface: ^2.13.0
   geocoding: ^3.0.0
   google_places_autocomplete: ^2.1.2
   
@@ -63,6 +65,7 @@ dependencies:
   
   # Image Picker
   image_picker: ^1.0.7
+  file_picker: ^8.1.4
   
   # QR Code
   qr_flutter: ^4.1.0
@@ -75,6 +78,10 @@ dependencies:
   
   # Share functionality
   share_plus: ^7.0.0
+
+  # Phone / links from marketplace detail
+  url_launcher: ^6.2.5
+  gal: ^2.3.2
 
 dev_dependencies:
   flutter_test:

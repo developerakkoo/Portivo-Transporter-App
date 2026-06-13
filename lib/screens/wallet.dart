@@ -1,5 +1,6 @@
 import 'package:flutter/material.dart';
 import 'package:provider/provider.dart';
+import '../core/constants/app_copy.dart';
 import '../core/theme/app_colors.dart';
 import '../providers/wallet_provider.dart';
 import '../data/models/wallet_transaction_model.dart';
@@ -49,7 +50,7 @@ class _WalletScreenState extends State<WalletScreen> {
           });
           return Scaffold(
             backgroundColor: AppColors.background,
-            appBar: AppBar(title: const Text('Wallet')),
+            appBar: AppBar(title: const Text(AppCopy.earnings)),
             body: const Center(child: CircularProgressIndicator()),
           );
         }
@@ -64,7 +65,7 @@ class _WalletScreenState extends State<WalletScreen> {
         return Scaffold(
           backgroundColor: AppColors.background,
           appBar: AppBar(
-            title: const Text('Wallet'),
+            title: const Text(AppCopy.earnings),
             actions: [
               IconButton(
                 icon: const Icon(Icons.refresh),

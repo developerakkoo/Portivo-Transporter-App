@@ -11,8 +11,40 @@ class ApiService {
     _setupInterceptors();
   }
 
+  /// Set on [RequestOptions.extra] after one token refresh + retry so a second
+  /// 401 does not trigger another refresh (avoids infinite loops when the user
+  /// is gone or the token is permanently invalid).
+  static const String _kAuthRefreshRetriedKey = 'porttivo.auth_refresh_retried';
+
   late Dio _dio;
   final StorageService _storage = StorageService();
+
+  static String? _lowercaseMessageFromBody(dynamic data) {
+    if (data is Map && data['message'] != null) {
+      return data['message'].toString().toLowerCase();
+    }
+    return null;
+  }
+
+  /// 401 responses where refreshing the session cannot help (user deleted, etc.).
+  static bool _isNonRecoverable401(Response? response) {
+    final msg = _lowercaseMessageFromBody(response?.data);
+    if (msg == null) return false;
+    if (msg.contains('user not found')) return true;
+    if (msg.contains('transporter not found')) return true;
+    if (msg.contains('account') && msg.contains('deleted')) return true;
+    return false;
+  }
+
+  static bool _shouldSkip401RefreshRecovery(RequestOptions options) {
+    final path = options.path;
+    if (path == ApiConfig.refreshToken) return true;
+    if (path == ApiConfig.sendOTP) return true;
+    if (path == ApiConfig.pinLogin) return true;
+    if (path == ApiConfig.companyUserLogin) return true;
+    if (path == ApiConfig.register) return true;
+    return false;
+  }
 
   BaseOptions get _baseOptions => BaseOptions(
         baseUrl: ApiConfig.baseUrl,
@@ -105,47 +137,58 @@ class ApiService {
             }
           }
           
-          // Handle 401 Unauthorized - try to refresh token
+          // Handle 401 Unauthorized - try to refresh token once, then stop.
           if (error.response?.statusCode == 401) {
+            final req = error.requestOptions;
+            if (_shouldSkip401RefreshRecovery(req)) {
+              return handler.next(error);
+            }
+            if (req.extra[_kAuthRefreshRetriedKey] == true) {
+              if (kDebugMode) {
+                print(
+                  'ApiService: 401 after token refresh retry — clearing session',
+                );
+              }
+              await _storage.clearTokens();
+              return handler.next(error);
+            }
+            if (_isNonRecoverable401(error.response)) {
+              if (kDebugMode) {
+                print(
+                  'ApiService: 401 non-recoverable (${_lowercaseMessageFromBody(error.response?.data)}), clearing session',
+                );
+              }
+              await _storage.clearTokens();
+              return handler.next(error);
+            }
             if (kDebugMode) {
               print('ApiService: 401 Unauthorized, attempting token refresh');
             }
             try {
               final refreshed = await _refreshToken();
-              if (refreshed) {
+              final token = await _storage.getAccessToken();
+              if (refreshed && token != null) {
                 if (kDebugMode) {
                   print('ApiService: Token refreshed, retrying request');
                 }
-                // Retry the original request
-                final opts = error.requestOptions;
-                final token = await _storage.getAccessToken();
-                if (token != null) {
-                  opts.headers['Authorization'] = 'Bearer $token';
-                  final response = await _dio.request(
-                    opts.path,
-                    options: Options(
-                      method: opts.method,
-                      headers: opts.headers,
-                    ),
-                    data: opts.data,
-                    queryParameters: opts.queryParameters,
-                  );
+                req.headers['Authorization'] = 'Bearer $token';
+                req.extra[_kAuthRefreshRetriedKey] = true;
+                try {
+                  final response = await _dio.fetch(req);
                   return handler.resolve(response);
-                } else {
-                  if (kDebugMode) {
-                    print('ApiService: Token refresh succeeded but no token retrieved');
-                  }
+                } on DioException catch (e) {
+                  return handler.next(e);
                 }
               } else {
                 if (kDebugMode) {
-                  print('ApiService: Token refresh failed');
+                  print('ApiService: Token refresh failed or no access token');
                 }
+                await _storage.clearTokens();
               }
             } catch (e) {
               if (kDebugMode) {
                 print('ApiService: Error during token refresh: $e');
               }
-              // Refresh failed, clear tokens
               await _storage.clearTokens();
             }
           }
@@ -266,6 +309,25 @@ class ApiService {
   }) async {
     try {
       return await _dio.put(
+        path,
+        data: data,
+        queryParameters: queryParameters,
+        options: options,
+      );
+    } catch (e) {
+      rethrow;
+    }
+  }
+
+  // PATCH request
+  Future<Response> patch(
+    String path, {
+    dynamic data,
+    Map<String, dynamic>? queryParameters,
+    Options? options,
+  }) async {
+    try {
+      return await _dio.patch(
         path,
         data: data,
         queryParameters: queryParameters,

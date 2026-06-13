@@ -19,9 +19,21 @@ class NotificationProvider with ChangeNotifier {
 
   NotificationProvider() {
     _socketService.addTripCreatedListener(_onTripCreated);
+    _socketService.addMarketplaceChatListener(_onMarketplaceSocket);
+    _socketService.addVehicleTypeRequestListener(_onVehicleTypeRequestUpdated);
   }
 
   void _onTripCreated(Map<String, dynamic> _) {
+    loadNotifications(refresh: true);
+  }
+
+  void _onMarketplaceSocket(Map<String, dynamic> payload) {
+    if (payload.containsKey('message') || payload['_event'] == 'booking:price-proposed') {
+      loadNotifications(refresh: true);
+    }
+  }
+
+  void _onVehicleTypeRequestUpdated(Map<String, dynamic> _) {
     loadNotifications(refresh: true);
   }
 
@@ -103,6 +115,7 @@ class NotificationProvider with ChangeNotifier {
   @override
   void dispose() {
     _socketService.removeTripCreatedListener(_onTripCreated);
+    _socketService.removeMarketplaceChatListener(_onMarketplaceSocket);
     super.dispose();
   }
 }

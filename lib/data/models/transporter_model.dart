@@ -6,6 +6,7 @@ class TransporterModel {
   final String? name;
   final String? email;
   final String? company;
+  final String operatingCountry;
   final String status;
   final bool hasAccess;
   final double walletBalance;
@@ -18,6 +19,7 @@ class TransporterModel {
     this.name,
     this.email,
     this.company,
+    this.operatingCountry = 'IN',
     required this.status,
     required this.hasAccess,
     required this.walletBalance,
@@ -32,6 +34,8 @@ class TransporterModel {
       name: json['name']?.toString(),
       email: json['email']?.toString(),
       company: json['company']?.toString(),
+      operatingCountry:
+          JsonParser.extractString(json['operatingCountry'], 'IN').toUpperCase(),
       status: JsonParser.extractString(json['status'], 'pending'),
       hasAccess: JsonParser.extractBool(json['hasAccess'], false),
       walletBalance: JsonParser.extractDouble(json['walletBalance'], 0.0),
@@ -45,6 +49,7 @@ class TransporterModel {
       'name': name,
       'email': email,
       'company': company,
+      'operatingCountry': operatingCountry,
     };
   }
 }

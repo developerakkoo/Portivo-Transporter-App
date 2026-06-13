@@ -5,28 +5,51 @@ import 'package:geolocator/geolocator.dart';
 import 'package:google_maps_flutter/google_maps_flutter.dart';
 import 'package:google_places_autocomplete/google_places_autocomplete.dart';
 import 'package:permission_handler/permission_handler.dart';
+import 'package:provider/provider.dart';
 
+import '../core/constants/operating_countries.dart';
 import '../core/theme/app_colors.dart';
 import '../data/models/trip_model.dart';
+import '../providers/auth_provider.dart';
 import '../services/location_service.dart';
-
-const LatLng _defaultPosition = LatLng(19.0760, 72.8777);
+import '../services/search_region_context.dart';
 const double _defaultZoom = 14.0;
+const Duration _gpsBootstrapTimeout = Duration(seconds: 8);
+
+/// Hides POI labels/taps to avoid Places SDK activity conflicts on Android.
+const String _poiHiddenMapStyle = '''
+[
+  {"featureType": "poi", "stylers": [{"visibility": "off"}]},
+  {"featureType": "transit", "stylers": [{"visibility": "off"}]}
+]
+''';
 
 class LocationPickerScreen extends StatefulWidget {
   final bool isPickup;
   final String? initialQuery;
 
-  /// When true (default), Places search is not biased to GPS or a fallback city—suited to
-  /// port-to-port logistics across India. When false, ranking favors the device location and Mumbai fallback.
-  final bool nationalSearch;
+  /// When true, never restrict suggestions to India (worldwide). Local GPS bias
+  /// still applies when location permission is granted.
+  final bool forceGlobalSearch;
+
+  /// Previously: `true` meant worldwide without local bias. Prefer [forceGlobalSearch].
+  @Deprecated('Use forceGlobalSearch')
+  final bool? nationalSearch;
+
+  /// When non-null, used as the AppBar title instead of "Select Pickup/Drop Location".
+  final String? appBarTitle;
 
   const LocationPickerScreen({
     super.key,
     required this.isPickup,
     this.initialQuery,
-    this.nationalSearch = true,
+    this.forceGlobalSearch = false,
+    this.nationalSearch,
+    this.appBarTitle,
   });
+
+  bool get _effectiveForceGlobal =>
+      forceGlobalSearch || nationalSearch == true;
 
   @override
   State<LocationPickerScreen> createState() => _LocationPickerScreenState();
@@ -50,6 +73,10 @@ class _LocationPickerScreenState extends State<LocationPickerScreen> {
   String? _errorMessage;
   String? _placesSearchError;
   Position? _userPosition;
+  bool _locationPermissionGranted = false;
+  String _operatingCountryCode = OperatingCountries.defaultCode;
+
+  bool get _forceGlobal => widget._effectiveForceGlobal;
 
   @override
   void initState() {
@@ -57,52 +84,59 @@ class _LocationPickerScreenState extends State<LocationPickerScreen> {
     if (widget.initialQuery != null && widget.initialQuery!.isNotEmpty) {
       _searchController.text = widget.initialQuery!;
     }
-    _init();
+    _searchController.addListener(() {
+      if (mounted) setState(() {});
+    });
+    unawaited(_bootstrap());
   }
 
-  Future<void> _init() async {
+  /// GPS + region resolution, then a single Places configure before map render.
+  Future<void> _bootstrap() async {
     try {
-      _userPosition = await _getUserPosition();
+      final permissionGranted = await Permission.locationWhenInUse.isGranted;
+      if (!mounted || _locationService.isDisposed) return;
 
-      if (widget.nationalSearch) {
-        await _locationService.initialize(
-          biasSearchToOrigin: false,
+      Position? pos;
+      try {
+        pos = await _getUserPositionIfGranted().timeout(_gpsBootstrapTimeout);
+      } on TimeoutException {
+        pos = null;
+      }
+
+      if (!mounted || _locationService.isDisposed) return;
+
+      final authProvider = Provider.of<AuthProvider>(context, listen: false);
+      _operatingCountryCode = authProvider.operatingCountry ??
+          OperatingCountries.defaultCode;
+
+      SearchRegionContext ctx;
+      if (_forceGlobal) {
+        ctx = SearchRegionContext(
+          latitude: pos?.latitude,
+          longitude: pos?.longitude,
+          confidence: pos != null
+              ? SearchRegionConfidence.high
+              : SearchRegionConfidence.none,
+          countryCodes: null,
         );
+      } else if (OperatingCountries.isSupported(_operatingCountryCode)) {
+        ctx = SearchRegionContext.fromOperatingCountry(
+          _operatingCountryCode,
+          latitude: pos?.latitude,
+          longitude: pos?.longitude,
+        );
+      } else if (pos != null) {
+        ctx = await SearchRegionContext.fromLatLng(pos.latitude, pos.longitude);
       } else {
-        await _locationService.initialize(
-          originLat: _userPosition?.latitude,
-          originLng: _userPosition?.longitude,
-          fallbackOriginLat: 19.076,
-          fallbackOriginLng: 72.8777,
-          biasSearchToOrigin: true,
+        ctx = SearchRegionContext.fromOperatingCountry(
+          OperatingCountries.defaultCode,
         );
       }
 
-      if (!mounted) return;
+      await _locationService.configureForRegion(ctx);
+      if (!mounted || _locationService.isDisposed) return;
 
-      if (!widget.nationalSearch) {
-        _scheduleOriginRefresh();
-      }
-
-      _predictionsSubscription =
-          _locationService.predictions.listen((predictions) {
-        if (mounted) {
-          setState(() => _predictions = predictions);
-        }
-      });
-
-      _loadingSubscription = _locationService.loading.listen((isLoading) {
-        if (mounted) {
-          setState(() => _isSearching = isLoading);
-        }
-      });
-
-      _searchErrorSubscription =
-          _locationService.searchError.listen((message) {
-        if (mounted) {
-          setState(() => _placesSearchError = message);
-        }
-      });
+      _attachStreamSubscriptions();
 
       if (_searchController.text.isNotEmpty) {
         _locationService.searchPlaces(_searchController.text);
@@ -111,13 +145,15 @@ class _LocationPickerScreenState extends State<LocationPickerScreen> {
       setState(() {
         _isInitialized = _locationService.isInitialized;
         _isLoading = false;
+        _locationPermissionGranted = permissionGranted;
+        _userPosition = pos;
         if (!_isInitialized) {
           _errorMessage =
               'Location search is unavailable. Please check your API key configuration.';
         }
       });
     } catch (e) {
-      if (mounted) {
+      if (mounted && !_locationService.isDisposed) {
         setState(() {
           _isLoading = false;
           _isInitialized = false;
@@ -127,18 +163,40 @@ class _LocationPickerScreenState extends State<LocationPickerScreen> {
     }
   }
 
-  /// Refresh origin after GPS may have become available (better ranking than fallback).
-  void _scheduleOriginRefresh() {
-    Future<void>.delayed(const Duration(seconds: 3), () async {
-      if (!mounted) return;
-      final pos = await _getUserPosition();
-      if (pos != null && mounted) {
-        _locationService.setOrigin(
-          latitude: pos.latitude,
-          longitude: pos.longitude,
-        );
+  void _attachStreamSubscriptions() {
+    _predictionsSubscription ??=
+        _locationService.predictions.listen((predictions) {
+      if (mounted) {
+        setState(() => _predictions = predictions);
       }
     });
+
+    _loadingSubscription ??= _locationService.loading.listen((isLoading) {
+      if (mounted) {
+        setState(() => _isSearching = isLoading);
+      }
+    });
+
+    _searchErrorSubscription ??=
+        _locationService.searchError.listen((message) {
+      if (mounted) {
+        setState(() => _placesSearchError = message);
+      }
+    });
+  }
+
+  Future<Position?> _getUserPositionIfGranted() async {
+    if (!await Permission.locationWhenInUse.isGranted) return null;
+
+    try {
+      final enabled = await Geolocator.isLocationServiceEnabled();
+      if (!enabled) return null;
+      return await Geolocator.getCurrentPosition(
+        desiredAccuracy: LocationAccuracy.medium,
+      );
+    } catch (_) {
+      return null;
+    }
   }
 
   Future<Position?> _getUserPosition() async {
@@ -159,6 +217,69 @@ class _LocationPickerScreenState extends State<LocationPickerScreen> {
     }
   }
 
+  Future<void> _useCurrentLocation({bool popOnSuccess = false}) async {
+    setState(() => _isFetchingDetails = true);
+    final pos = await _getUserPosition();
+    if (!mounted) return;
+    if (pos == null) {
+      setState(() => _isFetchingDetails = false);
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(
+          content: Text(
+            'Turn on location permission and GPS to use your current position.',
+          ),
+          backgroundColor: AppColors.error,
+        ),
+      );
+      return;
+    }
+
+    final address = await _locationService.reverseGeocode(
+      pos.latitude,
+      pos.longitude,
+    );
+
+    if (!mounted) return;
+
+    final location = TripLocation(
+      address: address ??
+          '${pos.latitude.toStringAsFixed(5)}, ${pos.longitude.toStringAsFixed(5)}',
+      coordinates: LocationCoordinates(
+        latitude: pos.latitude,
+        longitude: pos.longitude,
+      ),
+    );
+
+    if (popOnSuccess) {
+      setState(() => _isFetchingDetails = false);
+      Navigator.of(context).pop(location);
+      return;
+    }
+
+    if (_locationService.isInitialized) {
+      _locationService.setOrigin(
+        latitude: pos.latitude,
+        longitude: pos.longitude,
+      );
+    }
+
+    setState(() {
+      _userPosition = pos;
+      _locationPermissionGranted = true;
+      _selectedLocation = location;
+      _predictions = [];
+      _searchController.text = location.address ?? '';
+      _isFetchingDetails = false;
+    });
+
+    await _mapController?.animateCamera(
+      CameraUpdate.newLatLngZoom(
+        LatLng(pos.latitude, pos.longitude),
+        _defaultZoom,
+      ),
+    );
+  }
+
   @override
   void dispose() {
     _reverseGeocodeDebounce?.cancel();
@@ -167,11 +288,12 @@ class _LocationPickerScreenState extends State<LocationPickerScreen> {
     _searchErrorSubscription?.cancel();
     _locationService.dispose();
     _searchController.dispose();
-    _mapController?.dispose();
+    _mapController = null;
     super.dispose();
   }
 
   void _onSearchChanged(String value) {
+    if (!_isInitialized) return;
     if (value.isEmpty) {
       _locationService.clearPredictions();
       if (mounted) setState(() => _placesSearchError = null);
@@ -184,7 +306,7 @@ class _LocationPickerScreenState extends State<LocationPickerScreen> {
   }
 
   Future<void> _onPredictionTap(Prediction prediction) async {
-    if (prediction.placeId == null) return;
+    if (prediction.placeId == null || !_isInitialized) return;
 
     setState(() => _isFetchingDetails = true);
 
@@ -237,7 +359,14 @@ class _LocationPickerScreenState extends State<LocationPickerScreen> {
 
   void _confirmLocation() {
     if (_selectedLocation != null) {
-      Navigator.of(context).pop(_selectedLocation);
+      final location = _selectedLocation!.countryCode == null
+          ? TripLocation(
+              address: _selectedLocation!.address,
+              coordinates: _selectedLocation!.coordinates,
+              countryCode: _forceGlobal ? null : _operatingCountryCode,
+            )
+          : _selectedLocation;
+      Navigator.of(context).pop(location);
     }
   }
 
@@ -251,7 +380,7 @@ class _LocationPickerScreenState extends State<LocationPickerScreen> {
     if (_userPosition != null) {
       return LatLng(_userPosition!.latitude, _userPosition!.longitude);
     }
-    return _defaultPosition;
+    return OperatingCountries.defaultCenterFor(_operatingCountryCode);
   }
 
   Set<Marker> get _markers {
@@ -277,7 +406,7 @@ class _LocationPickerScreenState extends State<LocationPickerScreen> {
     return Scaffold(
       backgroundColor: AppColors.background,
       appBar: AppBar(
-        title: Text('Select $label Location'),
+        title: Text(widget.appBarTitle ?? 'Select $label Location'),
         leading: IconButton(
           icon: const Icon(Icons.arrow_back),
           onPressed: () => Navigator.of(context).pop(),
@@ -340,13 +469,21 @@ class _LocationPickerScreenState extends State<LocationPickerScreen> {
                   _errorMessage = null;
                   _isLoading = true;
                 });
-                _init();
+                unawaited(_bootstrap());
               },
               style: ElevatedButton.styleFrom(
                 backgroundColor: AppColors.primary,
                 foregroundColor: AppColors.background,
               ),
               child: const Text('Retry'),
+            ),
+            const SizedBox(height: 12.0),
+            OutlinedButton.icon(
+              onPressed: _isFetchingDetails
+                  ? null
+                  : () => _useCurrentLocation(popOnSuccess: true),
+              icon: const Icon(Icons.my_location),
+              label: const Text('Use current location'),
             ),
           ],
         ),
@@ -355,6 +492,10 @@ class _LocationPickerScreenState extends State<LocationPickerScreen> {
   }
 
   Widget _buildSearchBar(TextTheme textTheme) {
+    final hint = _forceGlobal
+        ? 'Worldwide search. Allow location for results ranked near you.'
+        : 'Search places near you. In India, results favor precise local matches when location is on.';
+
     return Padding(
       padding: const EdgeInsets.all(16.0),
       child: Column(
@@ -362,9 +503,7 @@ class _LocationPickerScreenState extends State<LocationPickerScreen> {
         mainAxisSize: MainAxisSize.min,
         children: [
           Text(
-            widget.nationalSearch
-                ? 'Type to search, then choose a suggestion. Results are India-wide—try port name with city (e.g. JNPT Navi Mumbai).'
-                : 'Type to search, then choose a suggestion. Results favor India and your area when location is on.',
+            hint,
             style: textTheme.bodySmall?.copyWith(
               color: AppColors.textSecondary,
               height: 1.35,
@@ -373,6 +512,7 @@ class _LocationPickerScreenState extends State<LocationPickerScreen> {
           const SizedBox(height: 10.0),
           TextField(
             controller: _searchController,
+            enabled: _isInitialized,
             decoration: InputDecoration(
               hintText: 'Search for a location...',
               prefixIcon: const Icon(Icons.search),
@@ -419,20 +559,83 @@ class _LocationPickerScreenState extends State<LocationPickerScreen> {
     return GoogleMap(
       onMapCreated: (controller) {
         _mapController = controller;
+        if (_userPosition != null) {
+          unawaited(
+            controller.animateCamera(
+              CameraUpdate.newLatLngZoom(
+                LatLng(
+                  _userPosition!.latitude,
+                  _userPosition!.longitude,
+                ),
+                _defaultZoom,
+              ),
+            ),
+          );
+        }
       },
       initialCameraPosition: CameraPosition(
         target: _mapCenter,
         zoom: _defaultZoom,
       ),
       markers: _markers,
-      myLocationEnabled: true,
-      myLocationButtonEnabled: true,
+      style: _poiHiddenMapStyle,
+      myLocationEnabled: _locationPermissionGranted,
+      myLocationButtonEnabled: _locationPermissionGranted,
       zoomControlsEnabled: false,
       onTap: (_) {},
     );
   }
 
+  Widget _buildCurrentLocationTile(TextTheme textTheme) {
+    return InkWell(
+      onTap: _isFetchingDetails ? null : () => _useCurrentLocation(),
+      borderRadius: BorderRadius.circular(12.0),
+      child: Container(
+        margin: const EdgeInsets.only(bottom: 8.0),
+        padding: const EdgeInsets.all(16.0),
+        decoration: BoxDecoration(
+          color: AppColors.primary.withValues(alpha: 0.08),
+          borderRadius: BorderRadius.circular(12.0),
+          border: Border.all(
+            color: AppColors.primary.withValues(alpha: 0.35),
+          ),
+        ),
+        child: Row(
+          children: [
+            const Icon(Icons.my_location, color: AppColors.primary),
+            const SizedBox(width: 12.0),
+            Expanded(
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  Text(
+                    'Use current location',
+                    style: textTheme.titleSmall?.copyWith(
+                      fontWeight: FontWeight.w600,
+                      color: AppColors.textPrimary,
+                    ),
+                  ),
+                  const SizedBox(height: 4.0),
+                  Text(
+                    'Like ride apps: drop a pin where you are now (needs GPS).',
+                    style: textTheme.bodySmall?.copyWith(
+                      color: AppColors.textSecondary,
+                    ),
+                  ),
+                ],
+              ),
+            ),
+            const Icon(Icons.chevron_right, color: AppColors.textSecondary),
+          ],
+        ),
+      ),
+    );
+  }
+
   Widget _buildPredictionsList(TextTheme textTheme) {
+    final showCurrent = _selectedLocation == null &&
+        _searchController.text.trim().isEmpty;
+
     return Column(
       crossAxisAlignment: CrossAxisAlignment.start,
       children: [
@@ -447,25 +650,36 @@ class _LocationPickerScreenState extends State<LocationPickerScreen> {
           ),
         ),
         Expanded(
-          child: _predictions.isEmpty
-              ? Center(
-                  child: Text(
-                    _searchController.text.isEmpty
-                        ? 'Search for a location above'
-                        : 'No results found',
-                    style: textTheme.bodyMedium?.copyWith(
-                      color: AppColors.textMuted,
+          child: ListView(
+            padding: const EdgeInsets.symmetric(horizontal: 16.0),
+            children: [
+              if (showCurrent) _buildCurrentLocationTile(textTheme),
+              if (_predictions.isEmpty)
+                Padding(
+                  padding: const EdgeInsets.symmetric(vertical: 24.0),
+                  child: Center(
+                    child: Text(
+                      _searchController.text.isEmpty
+                          ? (showCurrent
+                              ? 'Or type an address or place name above'
+                              : 'No results found')
+                          : 'No results found',
+                      style: textTheme.bodyMedium?.copyWith(
+                        color: AppColors.textMuted,
+                      ),
+                      textAlign: TextAlign.center,
                     ),
                   ),
                 )
-              : ListView.builder(
-                  padding: const EdgeInsets.symmetric(horizontal: 16.0),
-                  itemCount: _predictions.length,
-                  itemBuilder: (context, index) {
-                    final p = _predictions[index];
-                    return _buildPredictionTile(p, textTheme);
-                  },
+              else
+                ..._predictions.map(
+                  (p) => Padding(
+                    padding: const EdgeInsets.only(bottom: 8.0),
+                    child: _buildPredictionTile(p, textTheme),
+                  ),
                 ),
+            ],
+          ),
         ),
       ],
     );
@@ -476,7 +690,6 @@ class _LocationPickerScreenState extends State<LocationPickerScreen> {
       onTap: () => _onPredictionTap(prediction),
       borderRadius: BorderRadius.circular(12.0),
       child: Container(
-        margin: const EdgeInsets.only(bottom: 8.0),
         padding: const EdgeInsets.all(16.0),
         decoration: BoxDecoration(
           color: AppColors.offWhite,

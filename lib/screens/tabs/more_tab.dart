@@ -1,5 +1,6 @@
 import 'package:flutter/material.dart';
 import 'package:provider/provider.dart';
+import '../../core/constants/app_copy.dart';
 import '../../core/theme/app_colors.dart';
 import '../../providers/auth_provider.dart';
 import '../../services/permission_service.dart';
@@ -55,7 +56,7 @@ class MoreTab extends StatelessWidget {
                   _buildMenuItem(
                     context: context,
                     icon: Icons.account_balance_wallet_outlined,
-                    title: 'Wallet',
+                    title: AppCopy.earnings,
                     onTap: () {
                       Navigator.of(context).pushNamed('/wallet');
                     },

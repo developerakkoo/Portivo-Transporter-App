@@ -739,6 +739,70 @@ class TripService {
     }
   }
 
+  Future<TripModel?> saveTripDraft(Map<String, dynamic> draftData) async {
+    try {
+      final response = await _api.post(
+        ApiConfig.tripDrafts,
+        data: draftData,
+      );
+
+      if (response.data['success'] == true) {
+        final data = response.data['data'];
+        if (data != null && data is Map) {
+          return TripModel.fromJson(
+            data is Map<String, dynamic> ? data : Map<String, dynamic>.from(data),
+          );
+        }
+      }
+      return null;
+    } catch (e) {
+      rethrow;
+    }
+  }
+
+  Future<List<TripModel>> listTripDrafts() async {
+    try {
+      final response = await _api.get(ApiConfig.tripDrafts);
+
+      if (response.data['success'] == true) {
+        final data = response.data['data'];
+        if (data is List && data.isNotEmpty) {
+          return _parseTripsList(data);
+        }
+      }
+      return [];
+    } catch (e) {
+      rethrow;
+    }
+  }
+
+  Future<TripModel?> getTripDraft(String id) async {
+    try {
+      final response = await _api.get(ApiConfig.tripDraftById(id));
+
+      if (response.data['success'] == true) {
+        final data = response.data['data'];
+        if (data != null && data is Map) {
+          return TripModel.fromJson(
+            data is Map<String, dynamic> ? data : Map<String, dynamic>.from(data),
+          );
+        }
+      }
+      return null;
+    } catch (e) {
+      rethrow;
+    }
+  }
+
+  Future<bool> deleteTripDraft(String id) async {
+    try {
+      final response = await _api.delete(ApiConfig.tripDraftById(id));
+      return response.data['success'] == true;
+    } catch (e) {
+      rethrow;
+    }
+  }
+
   Future<TripModel?> getSharedTrip(String token) async {
     try {
       if (kDebugMode) {

@@ -1,9 +1,13 @@
 import 'package:flutter/material.dart';
+import 'package:flutter/services.dart';
 import 'package:provider/provider.dart';
 import '../../core/theme/app_colors.dart';
 import '../../core/constants/app_constants.dart';
+import '../../core/utils/validators.dart';
 import '../../providers/vehicle_provider.dart';
 import '../../providers/driver_provider.dart';
+import '../../providers/vehicle_type_provider.dart';
+import '../../widgets/searchable_vehicle_type_picker.dart';
 
 class AddEditVehicleScreen extends StatefulWidget {
   final String? vehicleId;
@@ -20,6 +24,7 @@ class _AddEditVehicleScreenState extends State<AddEditVehicleScreen> {
   String? _vehicleId;
   String _ownerType = 'OWN';
   String? _trailerType;
+  String? _selectedVehicleType;
   String? _selectedDriverId;
   bool _isLoading = false;
 
@@ -33,6 +38,7 @@ class _AddEditVehicleScreenState extends State<AddEditVehicleScreen> {
       }
       if (mounted) {
         context.read<DriverProvider>().loadDrivers();
+        context.read<VehicleTypeProvider>().ensureLoaded(refresh: true);
       }
     });
   }
@@ -54,12 +60,23 @@ class _AddEditVehicleScreenState extends State<AddEditVehicleScreen> {
         _vehicleNumberController.text = vehicle.vehicleNumber;
         _ownerType = vehicle.ownerType;
         _trailerType = vehicle.trailerType;
+        _selectedVehicleType = vehicle.vehicleType;
         _selectedDriverId = vehicle.driverId;
       });
     }
   }
 
   Future<void> _handleSave() async {
+    if (_selectedVehicleType == null || _selectedVehicleType!.isEmpty) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(
+          content: Text('Please select a vehicle type'),
+          backgroundColor: Colors.orange,
+        ),
+      );
+      return;
+    }
+
     if (_formKey.currentState?.validate() ?? false) {
       setState(() {
         _isLoading = true;
@@ -69,8 +86,11 @@ class _AddEditVehicleScreenState extends State<AddEditVehicleScreen> {
         final vehicleProvider = context.read<VehicleProvider>();
         
         final vehicleData = {
-          'vehicleNumber': _vehicleNumberController.text.trim().toUpperCase(),
+          'vehicleNumber':
+              Validators.normalizeIndianVehicleRegistration(
+                  _vehicleNumberController.text),
           'ownerType': _ownerType,
+          'vehicleType': _selectedVehicleType,
           if (_trailerType != null && _trailerType!.isNotEmpty) 'trailerType': _trailerType,
           if (_selectedDriverId != null) 'driverId': _selectedDriverId,
         };
@@ -146,16 +166,16 @@ class _AddEditVehicleScreenState extends State<AddEditVehicleScreen> {
                   controller: _vehicleNumberController,
                   textInputAction: TextInputAction.next,
                   textCapitalization: TextCapitalization.characters,
+                  maxLength: 10,
+                  inputFormatters: [
+                    FilteringTextInputFormatter.allow(RegExp(r'[A-Za-z0-9]')),
+                    LengthLimitingTextInputFormatter(10),
+                  ],
                   decoration: const InputDecoration(
                     labelText: 'Vehicle Number',
-                    hintText: 'Enter vehicle registration number',
+                    hintText: 'e.g. MH12AB3434 (10 characters)',
                   ),
-                  validator: (value) {
-                    if (value == null || value.trim().isEmpty) {
-                      return 'Please enter vehicle number';
-                    }
-                    return null;
-                  },
+                  validator: Validators.validateVehicleNumber,
                 ),
                 const SizedBox(height: 20.0),
 
@@ -179,13 +199,21 @@ class _AddEditVehicleScreenState extends State<AddEditVehicleScreen> {
                 ),
                 const SizedBox(height: 20.0),
 
-                // Trailer Type
+                SearchableVehicleTypePicker(
+                  value: _selectedVehicleType,
+                  onChanged: (value) {
+                    setState(() => _selectedVehicleType = value);
+                  },
+                ),
+                const SizedBox(height: 20.0),
+
+                // Trailer notes (optional physical label)
                 TextFormField(
                   initialValue: _trailerType,
                   textInputAction: TextInputAction.next,
                   decoration: const InputDecoration(
-                    labelText: 'Trailer Type (Optional)',
-                    hintText: 'e.g., 20ft, 40ft',
+                    labelText: 'Trailer Notes (Optional)',
+                    hintText: 'Physical trailer label or sub-type',
                   ),
                   onChanged: (value) {
                     _trailerType = value.trim().isEmpty ? null : value.trim();

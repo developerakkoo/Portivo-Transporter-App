@@ -30,7 +30,7 @@ class _MapScreenState extends State<MapScreen> {
 
   @override
   void dispose() {
-    _mapController?.dispose();
+    _mapController = null;
     super.dispose();
   }
 

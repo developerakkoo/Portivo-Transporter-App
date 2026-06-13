@@ -1,5 +1,6 @@
 import 'package:flutter/material.dart';
 import 'package:provider/provider.dart';
+import '../../core/constants/app_copy.dart';
 import '../../core/theme/app_colors.dart';
 import '../../core/constants/app_constants.dart';
 import '../../data/models/trip_model.dart';
@@ -9,6 +10,7 @@ import '../../providers/navigation_state_provider.dart';
 import '../../widgets/trip_expansion_card.dart';
 import '../../providers/auth_provider.dart';
 import '../../services/socket_service.dart';
+import '../../core/utils/create_trip_navigation.dart';
 import '../../services/permission_service.dart';
 import 'package:flutter/foundation.dart';
 
@@ -26,12 +28,14 @@ class _TripsTabState extends State<TripsTab>
   final SocketService _socketService = SocketService();
   bool _hasInitialized = false;
   String? _lastHighlightTripIdScheduled;
+  int _lastHandledOpenTripsSubTabNonce = 0;
+  int _lastScheduledOpenTripsSubTabNonce = 0;
   
   @override
   void initState() {
     super.initState();
     WidgetsBinding.instance.addObserver(this);
-    _tabController = TabController(length: 4, vsync: this);
+    _tabController = TabController(length: 5, vsync: this);
     _tabController.addListener(_onTabChanged);
     _searchController.addListener(() {
       setState(() {});
@@ -173,9 +177,7 @@ class _TripsTabState extends State<TripsTab>
                 return IconButton(
                   icon: const Icon(Icons.add_circle_outline),
                   onPressed: () async {
-                    // Navigate to create trip screen and wait for return
-                    await Navigator.of(context).pushNamed('/create-trip');
-                    // Refresh trips when returning from create trip screen
+                    await openCreateTripFlow(context);
                     _refreshTrips();
                   },
                   tooltip: 'Add Trip',
@@ -187,14 +189,18 @@ class _TripsTabState extends State<TripsTab>
         ],
         bottom: TabBar(
           controller: _tabController,
+          isScrollable: true,
+          tabAlignment: TabAlignment.start,
+          labelPadding: const EdgeInsets.symmetric(horizontal: 16.0),
           indicatorColor: AppColors.primary,
           labelColor: AppColors.primary,
           unselectedLabelColor: AppColors.textSecondary,
           tabs: const [
             Tab(text: 'Active'),
-            Tab(text: 'Completed'),
-            Tab(text: 'POD Pending'),
-            Tab(text: 'Available'),
+            Tab(text: AppCopy.awaitingPod),
+            Tab(text: AppCopy.completed),
+            Tab(text: AppCopy.cancelled),
+            Tab(text: 'Marketplace'),
           ],
           onTap: (index) => setState(() {}),
         ),
@@ -210,13 +216,34 @@ class _TripsTabState extends State<TripsTab>
               await tripProvider.loadAvailableTrips(refresh: true);
               if (!mounted) return;
               _tabController.animateTo(
-                navState.pendingTripsSubTabIndex ?? 3,
+                navState.pendingTripsSubTabIndex ?? 4,
               );
               _scheduleClearHighlight(navState);
             });
           } else if (navState.pendingHighlightTripId == null) {
             _lastHighlightTripIdScheduled = null;
           }
+
+          if (navState.pendingOpenTripsSubTabOnly != null &&
+              navState.openTripsSubTabNonce > _lastScheduledOpenTripsSubTabNonce) {
+            _lastScheduledOpenTripsSubTabNonce = navState.openTripsSubTabNonce;
+            final capturedNonce = navState.openTripsSubTabNonce;
+            WidgetsBinding.instance.addPostFrameCallback((_) {
+              if (!mounted) return;
+              final nav = context.read<NavigationStateProvider>();
+              if (nav.openTripsSubTabNonce != capturedNonce) return;
+              final idx = nav.pendingOpenTripsSubTabOnly;
+              if (idx == null) return;
+              if (idx >= 0 && idx < _tabController.length) {
+                _tabController.animateTo(idx);
+              }
+              nav.clearPendingOpenTripsSubTab();
+              _lastHandledOpenTripsSubTabNonce = capturedNonce;
+            });
+          } else if (navState.pendingOpenTripsSubTabOnly == null) {
+            _lastScheduledOpenTripsSubTabNonce = _lastHandledOpenTripsSubTabNonce;
+          }
+
           return SafeArea(
             child: Column(
               children: [
@@ -286,8 +313,9 @@ class _TripsTabState extends State<TripsTab>
                     controller: _tabController,
                     children: [
                       _buildTripsList(AppConstants.tripStatusActive, textTheme, highlightTripId: navState.pendingHighlightTripId),
-                      _buildTripsList(AppConstants.tripStatusCompleted, textTheme, highlightTripId: navState.pendingHighlightTripId),
                       _buildTripsList(AppConstants.tripStatusPodPending, textTheme, highlightTripId: navState.pendingHighlightTripId),
+                      _buildTripsList(AppConstants.tripStatusCompleted, textTheme, highlightTripId: navState.pendingHighlightTripId),
+                      _buildTripsList(AppConstants.tripStatusCancelled, textTheme, highlightTripId: navState.pendingHighlightTripId),
                       _buildTripsList(AppConstants.tripTabMarketplace, textTheme, highlightTripId: navState.pendingHighlightTripId),
                     ],
                   );
@@ -318,12 +346,16 @@ class _TripsTabState extends State<TripsTab>
             ]);
             showAcceptButton = false;
             break;
+          case AppConstants.tripStatusPodPending:
+            trips = tripProvider.podPendingTrips;
+            showAcceptButton = false;
+            break;
           case AppConstants.tripStatusCompleted:
             trips = tripProvider.completedTrips;
             showAcceptButton = false;
             break;
-          case AppConstants.tripStatusPodPending:
-            trips = tripProvider.podPendingTrips;
+          case AppConstants.tripStatusCancelled:
+            trips = tripProvider.cancelledTrips;
             showAcceptButton = false;
             break;
           case AppConstants.tripTabMarketplace:
@@ -431,9 +463,45 @@ class _TripsTabState extends State<TripsTab>
           },
           onAcceptTrip: showAcceptButton ? () => _onAcceptTrip(trip.id) : null,
           onRejectTrip: showAcceptButton ? () => _onRejectTrip(trip.id) : null,
+          onStartTrip: _canStartTripFromCard(trip) ? () => _onStartTrip(trip.id) : null,
+          driverTrackingStatus:
+              context.watch<TripProvider>().driverTrackingStatusFor(trip.id),
         );
       },
     );
+  }
+
+  bool _canStartTripFromCard(TripModel trip) {
+    return trip.status == AppConstants.tripStatusPlanned &&
+        trip.canStartTrip &&
+        !trip.isQueuedBlocked;
+  }
+
+  Future<void> _onStartTrip(String tripId) async {
+    final tripProvider = Provider.of<TripProvider>(context, listen: false);
+    try {
+      final success = await tripProvider.startTrip(tripId);
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(
+            content: Text(success ? 'Trip started' : (tripProvider.error ?? 'Failed to start trip')),
+            backgroundColor: success ? AppColors.success : AppColors.error,
+          ),
+        );
+        if (success) {
+          Navigator.of(context).pushNamed('/trip-detail', arguments: tripId);
+        }
+      }
+    } catch (e) {
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(
+            content: Text('Error: ${e.toString()}'),
+            backgroundColor: AppColors.error,
+          ),
+        );
+      }
+    }
   }
 
   Future<void> _onAcceptTrip(String tripId) async {

@@ -29,6 +29,7 @@ class AppConstants {
   // Trip Types
   static const String tripTypeImport = 'IMPORT';
   static const String tripTypeExport = 'EXPORT';
+  static const String tripTypeLocal = 'LOCAL';
   
   // Vehicle Owner Types
   static const String vehicleOwnerOwn = 'OWN';

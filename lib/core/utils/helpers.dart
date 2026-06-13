@@ -1,3 +1,4 @@
+import '../constants/app_copy.dart';
 import 'package:intl/intl.dart';
 
 class Helpers {
@@ -28,11 +29,13 @@ class Helpers {
       case 'ACTIVE':
         return 'Active';
       case 'COMPLETED':
-        return 'Completed';
+      case 'CLOSED_WITH_POD':
+      case 'CLOSED_WITHOUT_POD':
+        return AppCopy.completed;
       case 'POD_PENDING':
-        return 'POD Pending';
+        return AppCopy.awaitingPod;
       case 'CANCELLED':
-        return 'Cancelled';
+        return AppCopy.cancelled;
       default:
         return status;
     }
@@ -44,6 +47,8 @@ class Helpers {
         return 'Import';
       case 'EXPORT':
         return 'Export';
+      case 'LOCAL':
+        return 'Local';
       default:
         return tripType;
     }

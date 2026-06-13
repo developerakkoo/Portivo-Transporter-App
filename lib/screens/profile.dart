@@ -1,7 +1,11 @@
 import 'package:flutter/material.dart';
+import 'package:provider/provider.dart';
+import '../core/constants/operating_countries.dart';
+import '../core/constants/app_copy.dart';
 import '../core/theme/app_colors.dart';
 import '../core/utils/helpers.dart';
 import '../data/models/transporter_model.dart';
+import '../providers/auth_provider.dart';
 import '../services/transporter_service.dart';
 
 class ProfileScreen extends StatefulWidget {
@@ -15,6 +19,7 @@ class _ProfileScreenState extends State<ProfileScreen> {
   final TransporterService _transporterService = TransporterService();
   TransporterModel? _transporter;
   bool _isLoading = true;
+  bool _isSavingCountry = false;
   String? _error;
 
   @override
@@ -168,6 +173,8 @@ class _ProfileScreenState extends State<ProfileScreen> {
               value: _transporter!.company ?? 'Not set',
               textTheme: textTheme,
             ),
+            const SizedBox(height: 12.0),
+            _buildOperatingCountryCard(textTheme),
             const SizedBox(height: 32.0),
 
             // Account Information
@@ -183,7 +190,7 @@ class _ProfileScreenState extends State<ProfileScreen> {
             const SizedBox(height: 12.0),
             _buildInfoCard(
               icon: Icons.account_balance_wallet_outlined,
-              label: 'Wallet Balance',
+              label: AppCopy.earningsBalance,
               value: '\$${_transporter!.walletBalance.toStringAsFixed(2)}',
               textTheme: textTheme,
               valueColor: AppColors.primary,
@@ -248,6 +255,149 @@ class _ProfileScreenState extends State<ProfileScreen> {
         ],
       ),
     );
+  }
+
+  Widget _buildOperatingCountryCard(TextTheme textTheme) {
+    final countryName =
+        OperatingCountries.displayName(_transporter!.operatingCountry);
+    return Container(
+      padding: const EdgeInsets.all(16.0),
+      decoration: BoxDecoration(
+        color: AppColors.offWhite,
+        borderRadius: BorderRadius.circular(12.0),
+        border: Border.all(
+          color: AppColors.dividerGrey,
+          width: 1.0,
+        ),
+      ),
+      child: Row(
+        children: [
+          const Icon(
+            Icons.public_outlined,
+            color: AppColors.primary,
+            size: 24.0,
+          ),
+          const SizedBox(width: 16.0),
+          Expanded(
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Text(
+                  'Operating Country',
+                  style: textTheme.bodySmall?.copyWith(
+                    color: AppColors.textSecondary,
+                  ),
+                ),
+                const SizedBox(height: 4.0),
+                Text(
+                  countryName,
+                  style: textTheme.bodyMedium?.copyWith(
+                    color: AppColors.textPrimary,
+                    fontWeight: FontWeight.w500,
+                  ),
+                ),
+                const SizedBox(height: 4.0),
+                Text(
+                  'Controls map search and trip locations',
+                  style: textTheme.bodySmall?.copyWith(
+                    color: AppColors.textMuted,
+                  ),
+                ),
+              ],
+            ),
+          ),
+          TextButton(
+            onPressed: _isSavingCountry ? null : _showOperatingCountryEditor,
+            child: _isSavingCountry
+                ? const SizedBox(
+                    width: 18.0,
+                    height: 18.0,
+                    child: CircularProgressIndicator(strokeWidth: 2.0),
+                  )
+                : const Text('Change'),
+          ),
+        ],
+      ),
+    );
+  }
+
+  Future<void> _showOperatingCountryEditor() async {
+    if (_transporter == null) return;
+
+    var selectedCountry = _transporter!.operatingCountry;
+
+    final confirmed = await showDialog<bool>(
+      context: context,
+      builder: (dialogContext) {
+        return StatefulBuilder(
+          builder: (context, setDialogState) {
+            return AlertDialog(
+              title: const Text('Operating Country'),
+              content: DropdownButtonFormField<String>(
+                value: selectedCountry,
+                decoration: const InputDecoration(
+                  labelText: 'Country',
+                ),
+                items: OperatingCountries.all
+                    .map(
+                      (country) => DropdownMenuItem(
+                        value: country.code,
+                        child: Text(country.name),
+                      ),
+                    )
+                    .toList(),
+                onChanged: (value) {
+                  if (value == null) return;
+                  setDialogState(() => selectedCountry = value);
+                },
+              ),
+              actions: [
+                TextButton(
+                  onPressed: () => Navigator.of(dialogContext).pop(false),
+                  child: const Text('Cancel'),
+                ),
+                ElevatedButton(
+                  onPressed: selectedCountry == _transporter!.operatingCountry
+                      ? null
+                      : () => Navigator.of(dialogContext).pop(true),
+                  child: const Text('Save'),
+                ),
+              ],
+            );
+          },
+        );
+      },
+    );
+
+    if (confirmed != true || !mounted) return;
+
+    setState(() => _isSavingCountry = true);
+    try {
+      final updated = await _transporterService.updateProfile({
+        'operatingCountry': selectedCountry,
+      });
+      if (!mounted) return;
+      setState(() {
+        _transporter = updated;
+        _isSavingCountry = false;
+      });
+      final authProvider = Provider.of<AuthProvider>(context, listen: false);
+      authProvider.updateOperatingCountry(selectedCountry);
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(content: Text('Operating country updated')),
+      );
+    } catch (e) {
+      if (!mounted) return;
+      setState(() => _isSavingCountry = false);
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(
+          content: Text(
+            e.toString().replaceFirst('Exception: ', ''),
+          ),
+          backgroundColor: Colors.red,
+        ),
+      );
+    }
   }
 
   Widget _buildSectionTitle(String title, TextTheme textTheme) {

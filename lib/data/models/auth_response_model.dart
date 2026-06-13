@@ -47,6 +47,7 @@ class UserModel {
   final bool hasAccess;
   final String? transporterId; // For company users
   final List<String> permissions; // For company users
+  final String? operatingCountry;
 
   UserModel({
     required this.id,
@@ -57,6 +58,7 @@ class UserModel {
     required this.hasAccess,
     this.transporterId,
     List<String>? permissions,
+    this.operatingCountry,
   }) : permissions = permissions ?? [];
 
   factory UserModel.fromJson(Map<String, dynamic> json) {
@@ -71,6 +73,31 @@ class UserModel {
       permissions: json['permissions'] != null
           ? List<String>.from(json['permissions'])
           : [],
+      operatingCountry: json['operatingCountry']?.toString().toUpperCase(),
+    );
+  }
+
+  UserModel copyWith({
+    String? id,
+    String? mobile,
+    String? name,
+    String? userType,
+    String? status,
+    bool? hasAccess,
+    String? transporterId,
+    List<String>? permissions,
+    String? operatingCountry,
+  }) {
+    return UserModel(
+      id: id ?? this.id,
+      mobile: mobile ?? this.mobile,
+      name: name ?? this.name,
+      userType: userType ?? this.userType,
+      status: status ?? this.status,
+      hasAccess: hasAccess ?? this.hasAccess,
+      transporterId: transporterId ?? this.transporterId,
+      permissions: permissions ?? this.permissions,
+      operatingCountry: operatingCountry ?? this.operatingCountry,
     );
   }
 }

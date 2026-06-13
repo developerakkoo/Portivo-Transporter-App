@@ -20,6 +20,7 @@ class VehicleProvider with ChangeNotifier {
     String? status,
     String? ownerType,
     String? driverId,
+    bool availableForTrip = false,
     bool refresh = false,
   }) async {
     if (!refresh && _vehicles.isNotEmpty) return;
@@ -33,6 +34,7 @@ class VehicleProvider with ChangeNotifier {
         status: status,
         ownerType: ownerType,
         driverId: driverId,
+        availableForTrip: availableForTrip,
       );
 
       if (refresh) {

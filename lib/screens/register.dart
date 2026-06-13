@@ -1,5 +1,6 @@
 import 'package:flutter/material.dart';
 import 'package:provider/provider.dart';
+import '../core/constants/operating_countries.dart';
 import '../core/theme/app_colors.dart';
 import '../providers/auth_provider.dart';
 
@@ -19,6 +20,7 @@ class _RegisterScreenState extends State<RegisterScreen> {
   final _emailController = TextEditingController();
   final _phoneController = TextEditingController();
   final _companyController = TextEditingController();
+  String _selectedOperatingCountry = OperatingCountries.defaultCode;
   bool _isLoading = false;
 
   @override
@@ -45,6 +47,7 @@ class _RegisterScreenState extends State<RegisterScreen> {
           '${_firstNameController.text.trim()} ${_lastNameController.text.trim()}'.trim(),
           _emailController.text.trim(),
           _companyController.text.trim(),
+          _selectedOperatingCountry,
         );
 
         if (mounted) {
@@ -142,6 +145,8 @@ class _RegisterScreenState extends State<RegisterScreen> {
                     _buildEmailField(),
                     const SizedBox(height: 20.0),
                     _buildPhoneField(),
+                    const SizedBox(height: 20.0),
+                    _buildOperatingCountryField(),
                     const SizedBox(height: 20.0),
                     _buildCompanyField(),
 
@@ -262,6 +267,39 @@ class _RegisterScreenState extends State<RegisterScreen> {
         // Basic phone validation
         if (value.length < 10) {
           return 'Please enter a valid phone number';
+        }
+        return null;
+      },
+    );
+  }
+
+  Widget _buildOperatingCountryField() {
+    return DropdownButtonFormField<String>(
+      value: _selectedOperatingCountry,
+      decoration: const InputDecoration(
+        labelText: 'Operating Country',
+        hintText: 'Select where you operate',
+      ),
+      items: OperatingCountries.all
+          .map(
+            (country) => DropdownMenuItem(
+              value: country.code,
+              child: Text(country.name),
+            ),
+          )
+          .toList(),
+      onChanged: _isLoading
+          ? null
+          : (value) {
+              if (value == null) return;
+              setState(() => _selectedOperatingCountry = value);
+            },
+      validator: (value) {
+        if (value == null || value.isEmpty) {
+          return 'Please select your operating country';
+        }
+        if (!OperatingCountries.isSupported(value)) {
+          return 'Please select a supported country';
         }
         return null;
       },
