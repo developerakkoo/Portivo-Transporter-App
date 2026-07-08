@@ -9,6 +9,7 @@ import 'package:url_launcher/url_launcher.dart';
 import '../../core/theme/app_colors.dart';
 import '../../core/utils/helpers.dart';
 import '../../data/models/vehicle_post_model.dart';
+import '../../utils/error_utils.dart';
 import '../../providers/auth_provider.dart';
 import '../../services/vehicle_post_service.dart';
 import 'edit_vehicle_post_screen.dart';
@@ -56,7 +57,10 @@ class _VehiclePostDetailScreenState extends State<VehiclePostDetailScreen> {
     } catch (e) {
       if (!mounted) return;
       setState(() {
-        _error = e.toString().replaceFirst('Exception: ', '');
+        _error = ErrorUtils.userMessage(
+          e,
+          fallback: 'This listing is no longer available',
+        );
         _loading = false;
       });
     }
@@ -189,17 +193,31 @@ class _VehiclePostDetailScreenState extends State<VehiclePostDetailScreen> {
                     child: Column(
                       mainAxisAlignment: MainAxisAlignment.center,
                       children: [
+                        Icon(
+                          Icons.visibility_off_outlined,
+                          size: 48,
+                          color: AppColors.textSecondary,
+                        ),
+                        const SizedBox(height: 16),
                         Text(
                           _error!,
                           textAlign: TextAlign.center,
+                          style: textTheme.titleMedium?.copyWith(
+                            fontWeight: FontWeight.w600,
+                          ),
+                        ),
+                        const SizedBox(height: 8),
+                        Text(
+                          'This listing may have been booked or removed.',
+                          textAlign: TextAlign.center,
                           style: textTheme.bodyMedium?.copyWith(
-                            color: AppColors.error,
+                            color: AppColors.textSecondary,
                           ),
                         ),
                         const SizedBox(height: 16),
                         FilledButton(
-                          onPressed: _load,
-                          child: const Text('Retry'),
+                          onPressed: () => Navigator.of(context).pop(),
+                          child: const Text('Back to marketplace'),
                         ),
                       ],
                     ),
@@ -319,6 +337,31 @@ class _VehiclePostDetailScreenState extends State<VehiclePostDetailScreen> {
                         ),
                         if (p.note != null && p.note!.isNotEmpty)
                           _DetailRow(label: 'Note', value: p.note!),
+                        if (p.routes.isNotEmpty ||
+                            p.acceptsOtherDestinations) ...[
+                          const Divider(height: 32),
+                          Text(
+                            'Routes & Rates',
+                            style: textTheme.titleSmall?.copyWith(
+                              fontWeight: FontWeight.w600,
+                            ),
+                          ),
+                          const SizedBox(height: 8),
+                          ...p.routes.map(
+                            (r) => _RouteRateTile(
+                              destination: r.destination,
+                              exportRate: r.exportRate,
+                              importRate: r.importRate,
+                            ),
+                          ),
+                          if (p.acceptsOtherDestinations)
+                            const _RouteRateTile(
+                              destination: 'Any Other Destination',
+                              exportRate: null,
+                              importRate: null,
+                              alwaysNegotiable: true,
+                            ),
+                        ],
                         const Divider(height: 32),
                         Text(
                           'Transporter',
@@ -375,6 +418,75 @@ class _VehiclePostDetailScreenState extends State<VehiclePostDetailScreen> {
                         ),
                       ],
                     ),
+    );
+  }
+}
+
+class _RouteRateTile extends StatelessWidget {
+  const _RouteRateTile({
+    required this.destination,
+    required this.exportRate,
+    required this.importRate,
+    this.alwaysNegotiable = false,
+  });
+
+  final String destination;
+  final num? exportRate;
+  final num? importRate;
+  final bool alwaysNegotiable;
+
+  static final NumberFormat _inr = NumberFormat.decimalPattern('en_IN');
+
+  String _rate(num? v) =>
+      (v == null || alwaysNegotiable) ? 'Negotiable' : '₹ ${_inr.format(v)}';
+
+  @override
+  Widget build(BuildContext context) {
+    final textTheme = Theme.of(context).textTheme;
+    return Container(
+      margin: const EdgeInsets.only(bottom: 10),
+      padding: const EdgeInsets.all(12),
+      decoration: BoxDecoration(
+        border: Border.all(color: AppColors.dividerGrey),
+        borderRadius: BorderRadius.circular(10),
+      ),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Row(
+            children: [
+              const Icon(Icons.place_outlined,
+                  size: 16, color: AppColors.primary),
+              const SizedBox(width: 6),
+              Expanded(
+                child: Text(
+                  destination,
+                  style: textTheme.titleSmall?.copyWith(
+                    fontWeight: FontWeight.w600,
+                  ),
+                ),
+              ),
+            ],
+          ),
+          const SizedBox(height: 6),
+          Row(
+            children: [
+              Expanded(
+                child: Text(
+                  'Export: ${_rate(exportRate)}',
+                  style: textTheme.bodySmall,
+                ),
+              ),
+              Expanded(
+                child: Text(
+                  'Import: ${_rate(importRate)}',
+                  style: textTheme.bodySmall,
+                ),
+              ),
+            ],
+          ),
+        ],
+      ),
     );
   }
 }

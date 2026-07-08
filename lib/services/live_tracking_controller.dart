@@ -47,6 +47,7 @@ class LiveTrackingController extends ChangeNotifier {
       ValueNotifier(const TripMapLiveData());
 
   LatLng? pickup;
+  LatLng? waypoint;
   LatLng? drop;
   LatLng? driverLocation;
   double? driverHeading;
@@ -215,10 +216,20 @@ class LiveTrackingController extends ChangeNotifier {
 
   Future<void> loadRoute() async {
     final pick = pickup;
+    final waypointPt = waypoint;
     final dropPt = drop;
     if (pick == null || dropPt == null) return;
 
-    final result = await _routeService.getPickupDropRouteDetailed(pick, dropPt);
+    final RouteFetchResult result;
+    if (waypointPt != null) {
+      result = await _routeService.getMultiStopRouteDetailed(
+        pick,
+        waypointPt,
+        dropPt,
+      );
+    } else {
+      result = await _routeService.getPickupDropRouteDetailed(pick, dropPt);
+    }
     setRoutePolyline(
       result.points,
       status: result.status,
@@ -398,8 +409,14 @@ class LiveTrackingController extends ChangeNotifier {
 
   void setPickupDropFromTrip(TripModel trip) {
     final p = trip.pickupLocation?.coordinates;
+    final w = trip.intermediateLocation?.coordinates;
     final d = trip.dropLocation?.coordinates;
     if (p != null) pickup = LatLng(p.latitude, p.longitude);
+    if (w != null) {
+      waypoint = LatLng(w.latitude, w.longitude);
+    } else {
+      waypoint = null;
+    }
     if (d != null) drop = LatLng(d.latitude, d.longitude);
     syncLiveMap();
     notifyListeners();
@@ -419,6 +436,7 @@ class LiveTrackingController extends ChangeNotifier {
   void syncLiveMap() {
     liveMap.value = TripMapLiveData(
       pickup: pickup,
+      waypoint: waypoint,
       drop: drop,
       driverTarget: driverLocation,
       trail: List.from(driverTrail),

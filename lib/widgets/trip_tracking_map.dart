@@ -11,6 +11,7 @@ class TripTrackingMap extends StatefulWidget {
   const TripTrackingMap({
     super.key,
     this.pickupLocation,
+    this.waypointLocation,
     this.dropLocation,
     this.driverLocation,
     this.driverHeading,
@@ -24,6 +25,7 @@ class TripTrackingMap extends StatefulWidget {
   });
 
   final LatLng? pickupLocation;
+  final LatLng? waypointLocation;
   final LatLng? dropLocation;
   final LatLng? driverLocation;
 
@@ -282,6 +284,7 @@ class _TripTrackingMapState extends State<TripTrackingMap>
   List<LatLng> _collectBoundsPoints() {
     final points = <LatLng>[];
     if (widget.pickupLocation != null) points.add(widget.pickupLocation!);
+    if (widget.waypointLocation != null) points.add(widget.waypointLocation!);
     if (widget.dropLocation != null) points.add(widget.dropLocation!);
     final driver = _animatedDriver ?? widget.driverLocation;
     if (driver != null) points.add(driver);
@@ -469,8 +472,20 @@ class _TripTrackingMapState extends State<TripTrackingMap>
         Marker(
           markerId: const MarkerId('pickup'),
           position: widget.pickupLocation!,
-          infoWindow: const InfoWindow(title: 'Pickup'),
+          infoWindow: const InfoWindow(title: 'Point A'),
           icon: _pickupIcon ?? BitmapDescriptor.defaultMarkerWithHue(BitmapDescriptor.hueGreen),
+          zIndexInt: 1,
+        ),
+      );
+    }
+
+    if (widget.waypointLocation != null) {
+      markers.add(
+        Marker(
+          markerId: const MarkerId('waypoint'),
+          position: widget.waypointLocation!,
+          infoWindow: const InfoWindow(title: 'Point B'),
+          icon: BitmapDescriptor.defaultMarkerWithHue(BitmapDescriptor.hueOrange),
           zIndexInt: 1,
         ),
       );
@@ -481,7 +496,9 @@ class _TripTrackingMapState extends State<TripTrackingMap>
         Marker(
           markerId: const MarkerId('drop'),
           position: widget.dropLocation!,
-          infoWindow: const InfoWindow(title: 'Drop'),
+          infoWindow: InfoWindow(
+            title: widget.waypointLocation != null ? 'Point C' : 'Point B',
+          ),
           icon: _dropIcon ?? BitmapDescriptor.defaultMarkerWithHue(BitmapDescriptor.hueRed),
           zIndexInt: 1,
         ),

@@ -52,6 +52,7 @@ class SocketService {
   final List<void Function(Map<String, dynamic>)> _driverLocationUpdatedListeners = [];
   final List<void Function(Map<String, dynamic>)> _driverStatusChangedListeners = [];
   final List<void Function(Map<String, dynamic>)> _vehicleTypeRequestUpdatedListeners = [];
+  final List<void Function(Map<String, dynamic>)> _vehiclePostListeners = [];
 
   /// Marketplace T2T: `userId` is transporter id.
   void Function(String userId)? onUserOnline;
@@ -487,6 +488,24 @@ class SocketService {
       }
     });
 
+    void dispatchVehiclePost(Map<String, dynamic> payload) {
+      for (final listener in _vehiclePostListeners) {
+        listener(payload);
+      }
+    }
+
+    _socket!.on('vehiclePost:updated', (data) {
+      if (data is Map) {
+        dispatchVehiclePost(Map<String, dynamic>.from(data));
+      }
+    });
+
+    _socket!.on('vehiclePost:created', (data) {
+      if (data is Map) {
+        dispatchVehiclePost(Map<String, dynamic>.from(data));
+      }
+    });
+
     _socket!.on('user:online', (data) {
       if (data is Map) {
         final id = data['userId']?.toString();
@@ -780,6 +799,14 @@ class SocketService {
 
   void removeMarketplaceBookingLifecycleListener(void Function(Map<String, dynamic>) listener) {
     _marketplaceBookingLifecycleListeners.remove(listener);
+  }
+
+  void addVehiclePostListener(void Function(Map<String, dynamic>) listener) {
+    _vehiclePostListeners.add(listener);
+  }
+
+  void removeVehiclePostListener(void Function(Map<String, dynamic>) listener) {
+    _vehiclePostListeners.remove(listener);
   }
 
   void addSupportChatListener(void Function(Map<String, dynamic>) listener) {

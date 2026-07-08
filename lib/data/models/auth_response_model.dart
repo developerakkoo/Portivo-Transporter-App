@@ -48,6 +48,7 @@ class UserModel {
   final String? transporterId; // For company users
   final List<String> permissions; // For company users
   final String? operatingCountry;
+  final String? company;
 
   UserModel({
     required this.id,
@@ -59,6 +60,7 @@ class UserModel {
     this.transporterId,
     List<String>? permissions,
     this.operatingCountry,
+    this.company,
   }) : permissions = permissions ?? [];
 
   factory UserModel.fromJson(Map<String, dynamic> json) {
@@ -74,6 +76,7 @@ class UserModel {
           ? List<String>.from(json['permissions'])
           : [],
       operatingCountry: json['operatingCountry']?.toString().toUpperCase(),
+      company: json['company']?.toString(),
     );
   }
 
@@ -87,6 +90,7 @@ class UserModel {
     String? transporterId,
     List<String>? permissions,
     String? operatingCountry,
+    String? company,
   }) {
     return UserModel(
       id: id ?? this.id,
@@ -98,6 +102,7 @@ class UserModel {
       transporterId: transporterId ?? this.transporterId,
       permissions: permissions ?? this.permissions,
       operatingCountry: operatingCountry ?? this.operatingCountry,
+      company: company ?? this.company,
     );
   }
 }

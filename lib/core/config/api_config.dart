@@ -44,6 +44,8 @@ class ApiConfig {
   
   // Vehicle endpoints
   static const String vehicles = '/vehicles';
+  static const String vehiclesBulkImport = '/vehicles/bulk-import';
+  static const String vehiclesVerify = '/vehicles/verify';
   static String vehicleById(String id) => '/vehicles/$id';
   static const String vehicleTypes = '/vehicle-types';
   static const String vehicleTypeRequests = '/vehicle-type-requests';
@@ -138,6 +140,15 @@ class ApiConfig {
   static const String notifications = '/notifications';
   static String notificationMarkRead(String id) => '/notifications/$id/read';
   static const String notificationsReadAll = '/notifications/read-all';
+
+  // Payment session endpoints (generic payment screen flow)
+  static const String paymentsSessions = '/payments/sessions';
+  static String paymentSessionById(String id) => '/payments/sessions/$id';
+
+  /// PayU webhook path (surl/furl). Used both to build the reachable
+  /// success/failure override URL (`${baseUrl}$payuWebhookPath`) and to match
+  /// the intercepted WebView navigation that signals payment completion.
+  static const String payuWebhookPath = '/payments/payu/webhook';
 
   // Wallet endpoints
   static const String walletBalance = '/wallets/balance';

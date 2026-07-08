@@ -37,6 +37,7 @@ class TripTrackingFullscreenPage extends StatelessWidget {
                   return TripTrackingMap(
                     fullScreen: true,
                     pickupLocation: data.pickup,
+                    waypointLocation: data.waypoint,
                     dropLocation: data.drop,
                     driverLocation: data.driverTarget,
                     driverHeading: data.driverHeading,

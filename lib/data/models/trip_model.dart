@@ -181,6 +181,7 @@ class TripModel {
   final List<TripAssignment>? assignments;
   final String? reference;
   final TripLocation? pickupLocation;
+  final TripLocation? intermediateLocation;
   final TripLocation? dropLocation;
   final String tripType; // IMPORT, EXPORT, or LOCAL
   final String status; // PLANNED, ACTIVE, COMPLETED, POD_PENDING, CANCELLED
@@ -217,6 +218,7 @@ class TripModel {
     this.assignments,
     this.reference,
     this.pickupLocation,
+    this.intermediateLocation,
     this.dropLocation,
     required this.tripType,
     required this.status,
@@ -236,7 +238,11 @@ class TripModel {
     this.blockingTripId,
   });
 
-  bool get isQueuedBlocked => isQueued && (queuePosition ?? 0) > 1;
+  bool get isQueuedBlocked {
+    if (!isQueued) return false;
+    if (blockingTripId != null && blockingTripId != id) return true;
+    return (queuePosition ?? 0) > 1;
+  }
 
   bool get canAssignVehicle => capabilities?.assignVehicle ?? true;
   bool get canAssignDriver => capabilities?.assignDriver ?? true;
@@ -266,6 +272,7 @@ class TripModel {
     List<TripAssignment>? assignments,
     String? reference,
     TripLocation? pickupLocation,
+    TripLocation? intermediateLocation,
     TripLocation? dropLocation,
     String? tripType,
     String? status,
@@ -300,6 +307,7 @@ class TripModel {
       assignments: assignments ?? this.assignments,
       reference: reference ?? this.reference,
       pickupLocation: pickupLocation ?? this.pickupLocation,
+      intermediateLocation: intermediateLocation ?? this.intermediateLocation,
       dropLocation: dropLocation ?? this.dropLocation,
       tripType: tripType ?? this.tripType,
       status: status ?? this.status,
@@ -344,6 +352,7 @@ class TripModel {
       assignments: _parseAssignments(json['assignments']),
       reference: json['reference']?.toString(),
       pickupLocation: _parseTripLocation(json['pickupLocation']),
+      intermediateLocation: _parseTripLocation(json['intermediateLocation']),
       dropLocation: _parseTripLocation(json['dropLocation']),
       tripType: JsonParser.extractString(json['tripType'], 'EXPORT'),
       status: _normalizeTripStatus(JsonParser.extractString(json['status'], 'PLANNED')),
@@ -377,6 +386,7 @@ class TripModel {
       'containerNumber': containerNumber,
       'reference': reference,
       'pickupLocation': pickupLocation?.toJson(),
+      'intermediateLocation': intermediateLocation?.toJson(),
       'dropLocation': dropLocation?.toJson(),
       'tripType': tripType,
     };

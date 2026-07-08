@@ -4,6 +4,7 @@ import 'package:provider/provider.dart';
 import '../../core/theme/app_colors.dart';
 import '../../core/constants/app_constants.dart';
 import '../../core/utils/validators.dart';
+import '../../core/utils/user_feedback.dart';
 import '../../providers/vehicle_provider.dart';
 import '../../providers/driver_provider.dart';
 import '../../providers/vehicle_type_provider.dart';
@@ -105,32 +106,27 @@ class _AddEditVehicleScreenState extends State<AddEditVehicleScreen> {
 
         if (mounted) {
           if (success) {
-            ScaffoldMessenger.of(context).showSnackBar(
-              SnackBar(
-                content: Text(_vehicleId != null
-                    ? 'Vehicle updated successfully'
-                    : 'Vehicle created successfully'),
-                backgroundColor: Colors.green,
-              ),
+            showUserSuccessSnackBar(
+              context,
+              _vehicleId != null
+                  ? 'Vehicle updated successfully'
+                  : 'Vehicle created successfully',
             );
             Navigator.of(context).pop();
           } else {
-            ScaffoldMessenger.of(context).showSnackBar(
-              SnackBar(
-                content: Text(vehicleProvider.error ??
-                    'Failed to ${_vehicleId != null ? 'update' : 'create'} vehicle'),
-                backgroundColor: Colors.red,
-              ),
+            showUserErrorSnackBar(
+              context,
+              vehicleProvider.error,
+              fallback: 'Failed to ${_vehicleId != null ? 'update' : 'create'} vehicle',
             );
           }
         }
       } catch (e) {
         if (mounted) {
-          ScaffoldMessenger.of(context).showSnackBar(
-            SnackBar(
-              content: Text('Error: $e'),
-              backgroundColor: Colors.red,
-            ),
+          showUserErrorSnackBar(
+            context,
+            e,
+            fallback: 'Failed to ${_vehicleId != null ? 'update' : 'create'} vehicle',
           );
         }
       } finally {
@@ -173,7 +169,7 @@ class _AddEditVehicleScreenState extends State<AddEditVehicleScreen> {
                   ],
                   decoration: const InputDecoration(
                     labelText: 'Vehicle Number',
-                    hintText: 'e.g. MH12AB3434 (10 characters)',
+                    hintText: 'e.g. MH12AB3434 (9-10 characters)',
                   ),
                   validator: Validators.validateVehicleNumber,
                 ),

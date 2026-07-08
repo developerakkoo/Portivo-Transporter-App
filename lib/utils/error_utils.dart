@@ -1,15 +1,39 @@
 import 'package:dio/dio.dart';
 import 'package:flutter/foundation.dart';
 
-/// Utility class for extracting user-friendly error messages from exceptions
+import '../core/constants/app_copy.dart';
+
+/// Utility class for extracting user-friendly error messages from exceptions.
 class ErrorUtils {
-  /// Extract user-friendly error message from exception
-  /// Handles DioException and extracts backend error messages
+  static const _genericFallback = AppCopy.errorGeneric;
+  static const _technicalPatterns = [
+    'DioException',
+    'RequestOptions',
+    'validateStatus',
+    'bad response',
+  ];
+
+  /// Primary API for user-facing error text in UI and providers.
+  static String userMessage(dynamic error, {String? fallback}) {
+    final raw = extractErrorMessage(error);
+    final statusCode = error is DioException ? error.response?.statusCode : null;
+    final mapped = _mapBackendMessage(raw, statusCode: statusCode);
+    if (_looksTechnical(mapped)) {
+      return fallback ?? _genericFallback;
+    }
+    return mapped;
+  }
+
+  /// Extract backend/API message from a [DioException], if present.
+  static String? messageFromDio(DioException error) {
+    return extractBackendMessage(error);
+  }
+
+  /// Extract user-friendly error message from exception.
+  /// Handles DioException and extracts backend error messages.
   static String extractErrorMessage(dynamic error) {
     try {
-      // Handle DioException
       if (error is DioException) {
-        // Try to extract message from response data first
         if (error.response?.data != null) {
           final responseData = error.response!.data;
           if (responseData is Map<String, dynamic>) {
@@ -19,51 +43,51 @@ class ErrorUtils {
             }
           }
         }
-        
-        // Handle specific status codes
+
         final statusCode = error.response?.statusCode;
         if (statusCode == 400) {
-          return 'Invalid request. Please check your input and try again.';
+          return AppCopy.errorInvalidRequest;
         }
         if (statusCode == 401) {
-          return 'Authentication failed. Please login again.';
+          return AppCopy.errorAuthenticationFailed;
         }
         if (statusCode == 403) {
-          return 'Access denied. You do not have permission to perform this action.';
+          return AppCopy.errorPermissionDenied;
         }
         if (statusCode == 404) {
-          return 'Resource not found. Please check your request.';
+          return AppCopy.errorNotFound;
+        }
+        if (statusCode == 409) {
+          return AppCopy.errorAlreadyExists;
+        }
+        if (statusCode == 422) {
+          return AppCopy.errorInvalidRequest;
         }
         if (statusCode == 500) {
-          return 'Server error. Please try again later.';
+          return AppCopy.errorServer;
         }
-        
-        // Handle network errors
+
         if (error.type == DioExceptionType.connectionTimeout ||
             error.type == DioExceptionType.receiveTimeout ||
             error.type == DioExceptionType.sendTimeout) {
-          return 'Request timed out. Please check your connection and try again.';
+          return AppCopy.errorTimeout;
         }
-        
+
         if (error.type == DioExceptionType.connectionError) {
-          return 'Unable to connect to server. Please check your internet connection.';
+          return AppCopy.errorOffline;
         }
-        
-        // Use DioException's message if available
+
         if (error.message != null && error.message!.isNotEmpty) {
           return error.message!;
         }
       }
-      
-      // Handle string errors
+
       if (error is String) {
-        return error;
+        return _normalizeMessage(error);
       }
-      
-      // Try to extract from error string
-      final errorString = error.toString();
-      
-      // Check for common error patterns in string representation
+
+      final errorString = _normalizeMessage(error.toString());
+
       if (errorString.contains('Transporter not registered')) {
         return 'Your account is not registered. Please contact admin for registration.';
       }
@@ -73,44 +97,46 @@ class ErrorUtils {
       if (errorString.contains('Invalid PIN')) {
         return 'Invalid PIN. Please try again.';
       }
-      if (errorString.contains('All') && errorString.contains('milestones') && errorString.contains('completed')) {
-        // Extract the specific milestone message if available
-        final match = RegExp(r'All (\d+) milestones must be completed').firstMatch(errorString);
+      if (errorString.contains('All') &&
+          errorString.contains('milestones') &&
+          errorString.contains('completed')) {
+        final match =
+            RegExp(r'All (\d+) milestones must be completed').firstMatch(errorString);
         if (match != null) {
           return 'All ${match.group(1)} milestones must be completed before completing the trip.';
         }
         return 'All milestones must be completed before completing the trip.';
       }
-      if (errorString.contains('Only') && errorString.contains('trips can be cancelled')) {
-        // Extract the status requirement
-        final match = RegExp(r'Only (\w+) trips can be cancelled').firstMatch(errorString);
+      if (errorString.contains('Only') &&
+          errorString.contains('trips can be cancelled')) {
+        final match =
+            RegExp(r'Only (\w+) trips can be cancelled').firstMatch(errorString);
         if (match != null) {
           return 'Only ${match.group(1)} trips can be cancelled.';
         }
         return 'This trip cannot be cancelled in its current state.';
       }
       if (errorString.contains('timeout')) {
-        return 'Request timed out. Please try again.';
+        return AppCopy.errorTimeout;
       }
-      if (errorString.contains('Connection error') || errorString.contains('connectionError')) {
-        return 'Unable to connect to server. Please check your internet connection.';
+      if (errorString.contains('Connection error') ||
+          errorString.contains('connectionError')) {
+        return AppCopy.errorOffline;
       }
-      
-      // Fallback: return error string if it's reasonable length
-      if (errorString.length <= 150) {
+
+      if (errorString.length <= 150 && !_looksTechnical(errorString)) {
         return errorString;
       }
-      
-      return 'An error occurred. Please try again.';
+
+      return _genericFallback;
     } catch (e) {
       if (kDebugMode) {
         print('ErrorUtils: Error extracting error message: $e');
       }
-      return 'An unexpected error occurred. Please try again.';
+      return _genericFallback;
     }
   }
-  
-  /// Extract error message from DioException response data
+
   static String? extractBackendMessage(DioException error) {
     try {
       if (error.response?.data != null) {
@@ -125,5 +151,53 @@ class ErrorUtils {
       }
     }
     return null;
+  }
+
+  static String _normalizeMessage(String message) {
+    var normalized = message.trim();
+    if (normalized.startsWith('Exception: ')) {
+      normalized = normalized.substring('Exception: '.length).trim();
+    }
+    return normalized;
+  }
+
+  static bool _looksTechnical(String message) {
+    final lower = message.toLowerCase();
+    for (final pattern in _technicalPatterns) {
+      if (lower.contains(pattern.toLowerCase())) {
+        return true;
+      }
+    }
+    return false;
+  }
+
+  static String _mapBackendMessage(String message, {int? statusCode}) {
+    final normalized = _normalizeMessage(message);
+    final lower = normalized.toLowerCase();
+
+    if (lower.contains('driver with this mobile number already exists') ||
+        (lower.contains('driver') &&
+            lower.contains('already') &&
+            statusCode == 409)) {
+      return AppCopy.errorDriverAlreadyRegistered;
+    }
+    if (lower.contains('already linked to another transporter')) {
+      return AppCopy.errorDriverLinkedToOtherTransporter;
+    }
+    if (lower.contains('transporter with mobile number already exists')) {
+      return AppCopy.errorTransporterAlreadyRegistered;
+    }
+    if (statusCode == 409 &&
+        (lower.contains('already exists') || lower.contains('duplicate'))) {
+      return AppCopy.errorAlreadyExists;
+    }
+    if (statusCode == 403) {
+      return AppCopy.errorPermissionDenied;
+    }
+    if (statusCode == 500) {
+      return AppCopy.errorServer;
+    }
+
+    return normalized;
   }
 }

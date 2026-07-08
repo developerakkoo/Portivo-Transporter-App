@@ -1,6 +1,7 @@
 import 'package:flutter/foundation.dart';
 import '../data/models/company_user_model.dart';
 import '../services/company_user_service.dart';
+import '../utils/error_utils.dart';
 
 class CompanyUserProvider with ChangeNotifier {
   final CompanyUserService _companyUserService = CompanyUserService();
@@ -26,7 +27,7 @@ class CompanyUserProvider with ChangeNotifier {
       final users = await _companyUserService.getUsers();
       _users = users;
     } catch (e) {
-      _error = e.toString();
+      _error = ErrorUtils.userMessage(e);
       if (kDebugMode) {
         print('CompanyUserProvider: Error loading users: $e');
       }
@@ -46,7 +47,7 @@ class CompanyUserProvider with ChangeNotifier {
       _selectedUser = user;
       return user;
     } catch (e) {
-      _error = e.toString();
+      _error = ErrorUtils.userMessage(e);
       if (kDebugMode) {
         print('CompanyUserProvider: Error getting user: $e');
       }
@@ -69,7 +70,7 @@ class CompanyUserProvider with ChangeNotifier {
       }
       return user;
     } catch (e) {
-      _error = e.toString();
+      _error = ErrorUtils.userMessage(e);
       if (kDebugMode) {
         print('CompanyUserProvider: Error creating user: $e');
       }
@@ -99,7 +100,7 @@ class CompanyUserProvider with ChangeNotifier {
       }
       return false;
     } catch (e) {
-      _error = e.toString();
+      _error = ErrorUtils.userMessage(e);
       if (kDebugMode) {
         print('CompanyUserProvider: Error updating user: $e');
       }
@@ -125,7 +126,7 @@ class CompanyUserProvider with ChangeNotifier {
       }
       return success;
     } catch (e) {
-      _error = e.toString();
+      _error = ErrorUtils.userMessage(e);
       if (kDebugMode) {
         print('CompanyUserProvider: Error deleting user: $e');
       }
@@ -149,7 +150,7 @@ class CompanyUserProvider with ChangeNotifier {
       }
       return success;
     } catch (e) {
-      _error = e.toString();
+      _error = ErrorUtils.userMessage(e);
       if (kDebugMode) {
         print('CompanyUserProvider: Error setting PIN: $e');
       }
@@ -178,7 +179,7 @@ class CompanyUserProvider with ChangeNotifier {
       }
       return success;
     } catch (e) {
-      _error = e.toString();
+      _error = ErrorUtils.userMessage(e);
       if (kDebugMode) {
         print('CompanyUserProvider: Error toggling access: $e');
       }

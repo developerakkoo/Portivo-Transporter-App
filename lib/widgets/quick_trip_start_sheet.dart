@@ -4,6 +4,7 @@ import 'package:provider/provider.dart';
 import '../core/constants/app_copy.dart';
 import '../core/theme/app_colors.dart';
 import '../core/utils/helpers.dart';
+import '../core/utils/trip_operational_locations.dart';
 import '../data/models/trip_model.dart';
 import '../providers/trip_provider.dart';
 
@@ -54,14 +55,14 @@ class _QuickTripStartSheetState extends State<QuickTripStartSheet> {
 
   String _draftSubtitle(TripModel draft) {
     final parts = <String>[];
-    final pickup = draft.pickupLocation?.address;
-    final drop = draft.dropLocation?.address;
-    if (pickup != null && pickup.isNotEmpty && drop != null && drop.isNotEmpty) {
-      parts.add('$pickup → $drop');
-    } else if (pickup != null && pickup.isNotEmpty) {
-      parts.add('From $pickup');
-    } else if (drop != null && drop.isNotEmpty) {
-      parts.add('To $drop');
+    final route = TripOperationalLocations.routeSummary(
+      tripType: draft.tripType,
+      pickup: draft.pickupLocation,
+      intermediate: draft.intermediateLocation,
+      drop: draft.dropLocation,
+    );
+    if (route != null && route.isNotEmpty) {
+      parts.add(route);
     }
     if (draft.reference != null &&
         draft.reference!.isNotEmpty &&
@@ -72,6 +73,47 @@ class _QuickTripStartSheetState extends State<QuickTripStartSheet> {
     parts.add(Helpers.getTripTypeLabel(draft.tripType));
     parts.add(Helpers.formatDateTime(draft.updatedAt));
     return parts.join(' · ');
+  }
+
+  Future<void> _confirmDeleteDraft(
+    BuildContext context,
+    TripModel draft,
+  ) async {
+    final confirmed = await showDialog<bool>(
+      context: context,
+      builder: (context) => AlertDialog(
+        title: const Text(AppCopy.deleteDraft),
+        content: const Text(AppCopy.deleteDraftConfirm),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.of(context).pop(false),
+            child: const Text('Cancel'),
+          ),
+          TextButton(
+            onPressed: () => Navigator.of(context).pop(true),
+            style: TextButton.styleFrom(foregroundColor: AppColors.error),
+            child: const Text('Delete'),
+          ),
+        ],
+      ),
+    );
+
+    if (confirmed != true || !context.mounted) return;
+
+    final tripProvider = context.read<TripProvider>();
+    final success = await tripProvider.deleteDraft(draft.id);
+    if (!context.mounted) return;
+
+    ScaffoldMessenger.of(context).showSnackBar(
+      SnackBar(
+        content: Text(
+          success
+              ? 'Draft deleted'
+              : (tripProvider.error ?? 'Failed to delete draft'),
+        ),
+        backgroundColor: success ? AppColors.success : AppColors.error,
+      ),
+    );
   }
 
   @override
@@ -219,6 +261,12 @@ class _QuickTripStartSheetState extends State<QuickTripStartSheet> {
                                     ),
                                   ],
                                 ),
+                              ),
+                              IconButton(
+                                icon: const Icon(Icons.delete_outline),
+                                color: AppColors.error,
+                                tooltip: AppCopy.deleteDraft,
+                                onPressed: () => _confirmDeleteDraft(context, draft),
                               ),
                               const Icon(
                                 Icons.chevron_right,

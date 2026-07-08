@@ -4,6 +4,7 @@ import 'package:google_maps_flutter/google_maps_flutter.dart';
 class TripMapLiveData {
   const TripMapLiveData({
     this.pickup,
+    this.waypoint,
     this.drop,
     this.driverTarget,
     this.trail = const [],
@@ -13,6 +14,7 @@ class TripMapLiveData {
   });
 
   final LatLng? pickup;
+  final LatLng? waypoint;
   final LatLng? drop;
   final LatLng? driverTarget;
   final List<LatLng> trail;
@@ -22,6 +24,7 @@ class TripMapLiveData {
 
   TripMapLiveData copyWith({
     LatLng? pickup,
+    LatLng? waypoint,
     LatLng? drop,
     LatLng? driverTarget,
     List<LatLng>? trail,
@@ -31,6 +34,7 @@ class TripMapLiveData {
   }) {
     return TripMapLiveData(
       pickup: pickup ?? this.pickup,
+      waypoint: waypoint ?? this.waypoint,
       drop: drop ?? this.drop,
       driverTarget: driverTarget ?? this.driverTarget,
       trail: trail ?? this.trail,

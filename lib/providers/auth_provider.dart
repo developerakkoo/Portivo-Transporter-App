@@ -49,7 +49,7 @@ class AuthProvider with ChangeNotifier {
         print('AuthProvider: Error during initialization: $e');
         print('Stack: $stackTrace');
       }
-      _error = e.toString();
+      _error = ErrorUtils.userMessage(e);
       await _clearInvalidSession();
     } finally {
       _isLoading = false;
@@ -101,6 +101,7 @@ class AuthProvider with ChangeNotifier {
         status: transporter.status,
         hasAccess: transporter.hasAccess,
         operatingCountry: transporter.operatingCountry,
+        company: transporter.company,
       );
       if (kDebugMode) {
         print('AuthProvider: User from transporter profile — ${_user!.id}');
@@ -208,7 +209,7 @@ class AuthProvider with ChangeNotifier {
         print('AuthProvider: Registration error: $e');
         print('Stack: $stackTrace');
       }
-      _error = e.toString();
+      _error = ErrorUtils.userMessage(e);
       _isLoading = false;
       notifyListeners();
       return false;
@@ -388,7 +389,7 @@ class AuthProvider with ChangeNotifier {
         print('AuthProvider: Logout error: $e');
         print('Stack: $stackTrace');
       }
-      _error = e.toString();
+      _error = ErrorUtils.userMessage(e);
     } finally {
       _isLoading = false;
       notifyListeners();
@@ -402,6 +403,6 @@ class AuthProvider with ChangeNotifier {
 
   /// Extract user-friendly error message from exception
   String _extractErrorMessage(dynamic error) {
-    return ErrorUtils.extractErrorMessage(error);
+    return ErrorUtils.userMessage(error);
   }
 }

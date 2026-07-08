@@ -46,7 +46,7 @@ class FuelProvider with ChangeNotifier {
         _fuelCards = cards;
       }
     } catch (e) {
-      _error = ErrorUtils.extractErrorMessage(e);
+      _error = ErrorUtils.userMessage(e);
       if (kDebugMode) {
         print('FuelProvider: Error loading fuel cards: $_error');
       }
@@ -72,7 +72,7 @@ class FuelProvider with ChangeNotifier {
         _assignedCards = cards;
       }
     } catch (e) {
-      _error = ErrorUtils.extractErrorMessage(e);
+      _error = ErrorUtils.userMessage(e);
       if (kDebugMode) {
         print('FuelProvider: Error loading assigned cards: $_error');
       }
@@ -111,7 +111,7 @@ class FuelProvider with ChangeNotifier {
         _transactions = transactions;
       }
     } catch (e) {
-      _error = ErrorUtils.extractErrorMessage(e);
+      _error = ErrorUtils.userMessage(e);
       if (kDebugMode) {
         print('FuelProvider: Error loading transactions: $_error');
       }
@@ -144,7 +144,7 @@ class FuelProvider with ChangeNotifier {
       );
       return result;
     } catch (e) {
-      _error = ErrorUtils.extractErrorMessage(e);
+      _error = ErrorUtils.userMessage(e);
       if (kDebugMode) {
         print('FuelProvider: Error generating QR: $_error');
       }
@@ -172,7 +172,7 @@ class FuelProvider with ChangeNotifier {
       );
       return result;
     } catch (e) {
-      _error = ErrorUtils.extractErrorMessage(e);
+      _error = ErrorUtils.userMessage(e);
       if (kDebugMode) {
         print('FuelProvider: Error scanning QR: $_error');
       }
@@ -223,7 +223,7 @@ class FuelProvider with ChangeNotifier {
       }
       return card;
     } catch (e) {
-      _error = ErrorUtils.extractErrorMessage(e);
+      _error = ErrorUtils.userMessage(e);
       if (kDebugMode) {
         print('FuelProvider: Error creating fuel card: $_error');
       }
@@ -259,7 +259,7 @@ class FuelProvider with ChangeNotifier {
       }
       return card;
     } catch (e) {
-      _error = ErrorUtils.extractErrorMessage(e);
+      _error = ErrorUtils.userMessage(e);
       if (kDebugMode) {
         print('FuelProvider: Error assigning fuel card: $_error');
       }

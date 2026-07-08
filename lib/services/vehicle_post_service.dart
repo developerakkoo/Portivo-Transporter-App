@@ -171,6 +171,15 @@ class VehiclePostService {
     }
   }
 
+  /// Serialize a route with per-direction rates for the API. Null rate => negotiable.
+  static Map<String, dynamic> _routePayload(MarketplaceRouteRate r) {
+    return {
+      'destination': textOnlyLocation(r.destination),
+      'exportRate': r.exportRate,
+      'importRate': r.importRate,
+    };
+  }
+
   /// POST /api/vehicle-posts — create availability post.
   Future<VehiclePostModel?> create({
     required String vehicleType,
@@ -184,6 +193,8 @@ class VehiclePostService {
     int? quantity,
     String? note,
     num? pricePerVehicle,
+    List<MarketplaceRouteRate> routes = const [],
+    bool acceptsOtherDestinations = false,
   }) async {
     final originTrim = originAddress.trim();
     if (originTrim.isEmpty) {
@@ -208,7 +219,11 @@ class VehiclePostService {
         'quantity': quantity,
       if (note != null && note.trim().isNotEmpty) 'note': note.trim(),
       if (pricePerVehicle != null) 'pricePerVehicle': pricePerVehicle,
-      if (destObjects.isNotEmpty) 'destinations': destObjects,
+      if (routes.isNotEmpty)
+        'routes': routes.map(_routePayload).toList()
+      else if (destObjects.isNotEmpty)
+        'destinations': destObjects,
+      'acceptsOtherDestinations': acceptsOtherDestinations,
     };
 
     try {
@@ -250,6 +265,8 @@ class VehiclePostService {
     int? quantity,
     String? note,
     num? pricePerVehicle,
+    List<MarketplaceRouteRate>? routes,
+    bool? acceptsOtherDestinations,
   }) async {
     final originTrim = originAddress.trim();
     if (originTrim.isEmpty) {
@@ -275,7 +292,12 @@ class VehiclePostService {
         'quantity': quantity,
       'note': (note != null && note.trim().isNotEmpty) ? note.trim() : null,
       'pricePerVehicle': pricePerVehicle,
-      'destinations': destObjects,
+      if (routes != null)
+        'routes': routes.map(_routePayload).toList()
+      else
+        'destinations': destObjects,
+      if (acceptsOtherDestinations != null)
+        'acceptsOtherDestinations': acceptsOtherDestinations,
     };
 
     try {

@@ -2,7 +2,9 @@ import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:provider/provider.dart';
 import 'package:flutter_contacts/flutter_contacts.dart';
+import '../../core/constants/app_copy.dart';
 import '../../core/theme/app_colors.dart';
+import '../../core/utils/user_feedback.dart';
 import '../../providers/driver_provider.dart';
 
 class AddDriverScreen extends StatefulWidget {
@@ -57,12 +59,7 @@ class _AddDriverScreenState extends State<AddDriverScreen> {
       }
     } catch (e) {
       if (mounted) {
-        ScaffoldMessenger.of(context).showSnackBar(
-          SnackBar(
-            content: Text('Failed to pick contact: $e'),
-            backgroundColor: Colors.red,
-          ),
-        );
+        showUserErrorSnackBar(context, e, fallback: AppCopy.errorContactsPickFailed);
       }
     }
   }
@@ -83,30 +80,19 @@ class _AddDriverScreenState extends State<AddDriverScreen> {
 
         if (mounted) {
           if (driver != null) {
-            ScaffoldMessenger.of(context).showSnackBar(
-              const SnackBar(
-                content: Text('Driver created successfully'),
-                backgroundColor: Colors.green,
-              ),
-            );
+            showUserSuccessSnackBar(context, 'Driver created successfully');
             Navigator.of(context).pop();
           } else {
-            ScaffoldMessenger.of(context).showSnackBar(
-              SnackBar(
-                content: Text(driverProvider.error ?? 'Failed to create driver'),
-                backgroundColor: Colors.red,
-              ),
+            showUserErrorSnackBar(
+              context,
+              driverProvider.error,
+              fallback: 'Failed to create driver',
             );
           }
         }
       } catch (e) {
         if (mounted) {
-          ScaffoldMessenger.of(context).showSnackBar(
-            SnackBar(
-              content: Text('Error: $e'),
-              backgroundColor: Colors.red,
-            ),
-          );
+          showUserErrorSnackBar(context, e, fallback: 'Failed to create driver');
         }
       } finally {
         if (mounted) {

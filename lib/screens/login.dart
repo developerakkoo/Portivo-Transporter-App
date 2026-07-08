@@ -90,7 +90,7 @@ class _LoginScreenState extends State<LoginScreen> with WidgetsBindingObserver {
         setState(() {
           _isLoading = false;
           if (!success) {
-            _errorMessage = ErrorUtils.extractErrorMessage(
+            _errorMessage = ErrorUtils.userMessage(
               authProvider.error ?? 'Login failed',
             );
           }

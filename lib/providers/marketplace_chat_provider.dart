@@ -4,6 +4,7 @@ import '../data/models/marketplace_chat_models.dart';
 import '../services/marketplace_message_cache.dart';
 import '../services/socket_service.dart';
 import '../services/vehicle_booking_service.dart';
+import '../utils/error_utils.dart';
 
 /// Global marketplace chat: conversation list + socket fan-in for badges / refresh.
 class MarketplaceChatProvider extends ChangeNotifier {
@@ -51,7 +52,7 @@ class MarketplaceChatProvider extends ChangeNotifier {
       _totalUnread = _conversations.fold<int>(0, (s, c) => s + c.unreadCount);
       _error = null;
     } catch (e) {
-      _error = e.toString();
+      _error = ErrorUtils.userMessage(e);
       if (kDebugMode) print('MarketplaceChatProvider: $e');
     } finally {
       _loading = false;

@@ -1,15 +1,19 @@
 import 'package:flutter/foundation.dart';
 import 'package:shared_preferences/shared_preferences.dart';
+import '../core/notifications/app_banner_controller.dart';
 import '../data/models/vehicle_type_model.dart';
 import '../data/models/vehicle_type_request_model.dart';
 import '../services/socket_service.dart';
 import '../services/vehicle_type_service.dart';
+import '../utils/error_utils.dart';
 
 class VehicleTypeProvider with ChangeNotifier {
   static const _dismissedRecentDecisionsKey = 'vehicle_type_dismissed_recent_decisions';
 
   final VehicleTypeService _service = VehicleTypeService();
   final SocketService _socketService = SocketService();
+  final AppBannerController? _bannerController;
+  final Set<String> _bannerShownDecisionIds = {};
 
   List<VehicleTypeModel> _types = [];
   List<VehicleTypeRequestModel> _myRequests = [];
@@ -19,12 +23,54 @@ class VehicleTypeProvider with ChangeNotifier {
   bool _isLoadingRequests = false;
   String? _error;
 
-  VehicleTypeProvider() {
+  VehicleTypeProvider({AppBannerController? bannerController})
+      : _bannerController = bannerController {
     _socketService.addVehicleTypeRequestListener(_onVehicleTypeRequestUpdated);
   }
 
   void _onVehicleTypeRequestUpdated(Map<String, dynamic> _) {
-    ensureLoaded(refresh: true);
+    final previousStatuses = {
+      for (final request in _myRequests) request.id: request.status,
+    };
+    ensureLoaded(refresh: true).then((_) {
+      _showBannersForNewDecisions(previousStatuses);
+    });
+  }
+
+  void _showBannersForNewDecisions(Map<String, String> previousStatuses) {
+    final controller = _bannerController;
+    if (controller == null) return;
+
+    for (final request in _myRequests) {
+      if (!request.isApproved && !request.isRejected) continue;
+      if (_dismissedRecentDecisionIds.contains(request.id)) continue;
+      if (_bannerShownDecisionIds.contains(request.id)) continue;
+
+      final previousStatus = previousStatuses[request.id]?.toLowerCase();
+      final wasAlreadyDecided =
+          previousStatus == 'approved' || previousStatus == 'rejected';
+      if (wasAlreadyDecided) continue;
+
+      if (request.isApproved) {
+        controller.show(
+          id: 'vehicle-type-approved-${request.id}',
+          title: 'Vehicle type approved',
+          body: '${request.requestedName} was added to the catalog.',
+          type: AppBannerType.success,
+        );
+      } else if (request.isRejected) {
+        final reason = request.rejectionReason?.trim();
+        controller.show(
+          id: 'vehicle-type-rejected-${request.id}',
+          title: 'Vehicle type rejected',
+          body: reason != null && reason.isNotEmpty
+              ? reason
+              : '${request.requestedName} was not approved.',
+          type: AppBannerType.warning,
+        );
+      }
+      _bannerShownDecisionIds.add(request.id);
+    }
   }
 
   List<VehicleTypeModel> get types => _types;
@@ -137,7 +183,7 @@ class VehicleTypeProvider with ChangeNotifier {
     try {
       _types = await _service.getActiveTypes();
     } catch (e) {
-      _error = e.toString();
+      _error = ErrorUtils.userMessage(e);
       if (kDebugMode) {
         print('VehicleTypeProvider: Error loading types: $e');
       }

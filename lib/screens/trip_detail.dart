@@ -13,6 +13,7 @@ import '../core/constants/app_constants.dart';
 import '../core/utils/helpers.dart';
 import '../core/config/api_config.dart';
 import '../core/utils/media_url.dart';
+import '../core/utils/user_feedback.dart';
 import '../data/models/trip_model.dart';
 import '../data/models/vehicle_model.dart';
 import '../data/models/driver_model.dart';
@@ -22,11 +23,14 @@ import '../providers/vehicle_provider.dart';
 import '../providers/driver_provider.dart';
 import '../models/trip_map_live_data.dart';
 import '../services/trip_service.dart';
+import '../core/utils/trip_operational_locations.dart';
 import '../core/utils/vehicle_driver_resolver.dart';
+import '../widgets/edit_trip_locations_sheet.dart';
 import '../services/live_tracking_controller.dart';
 import '../services/socket_service.dart';
 import '../widgets/trip_action_confirm_dialog.dart';
 import '../widgets/trip_tracking_map.dart';
+import '../utils/error_utils.dart';
 import 'trip_tracking_fullscreen_page.dart';
 
 class TripDetailScreen extends StatefulWidget {
@@ -490,7 +494,7 @@ class _TripDetailScreenState extends State<TripDetailScreen> {
       if (mounted) {
         setState(() {
           _isLoading = false;
-          _error = e.toString();
+          _error = ErrorUtils.userMessage(e);
         });
       }
     }
@@ -502,7 +506,7 @@ class _TripDetailScreenState extends State<TripDetailScreen> {
     final t = _trip!;
     switch (action) {
       case 'start':
-        if (!t.canStartTrip) return;
+        if (!t.canStartTrip || t.isQueuedBlocked) return;
         break;
       case 'complete':
         if (!t.canCompleteTrip) return;
@@ -1122,6 +1126,7 @@ class _TripDetailScreenState extends State<TripDetailScreen> {
                   builder: (context, data, _) {
                     return TripTrackingMap(
                       pickupLocation: data.pickup,
+                      waypointLocation: data.waypoint,
                       dropLocation: data.drop,
                       driverLocation: data.driverTarget,
                       driverHeading: data.driverHeading,
@@ -1435,6 +1440,29 @@ class _TripDetailScreenState extends State<TripDetailScreen> {
             _buildAssignmentCard(trip, textTheme),
             const SizedBox(height: 12),
           ],
+          if (trip.isQueuedBlocked) ...[
+            Container(
+              padding: const EdgeInsets.all(12),
+              decoration: BoxDecoration(
+                color: AppColors.warning.withValues(alpha: 0.1),
+                borderRadius: BorderRadius.circular(10),
+                border: Border.all(color: AppColors.warning.withValues(alpha: 0.35)),
+              ),
+              child: Row(
+                children: [
+                  Icon(Icons.hourglass_top, size: 18, color: AppColors.warning),
+                  const SizedBox(width: 8),
+                  Expanded(
+                    child: Text(
+                      'Waiting for the active trip to complete before this trip can start.',
+                      style: textTheme.bodySmall?.copyWith(color: AppColors.textSecondary),
+                    ),
+                  ),
+                ],
+              ),
+            ),
+            const SizedBox(height: 12),
+          ],
           if (hasActions) ...[
             _buildActionButtons(trip, textTheme),
           ] else
@@ -1541,7 +1569,33 @@ class _TripDetailScreenState extends State<TripDetailScreen> {
       );
     }
 
-    if (primaryBtn == null && secondaryBtn == null) return const SizedBox.shrink();
+    if (primaryBtn == null && secondaryBtn == null) {
+      if (trip.isQueuedBlocked) {
+        return Container(
+          padding: const EdgeInsets.fromLTRB(14, 10, 14, 14),
+          decoration: BoxDecoration(
+            color: AppColors.background,
+            border: Border(top: BorderSide(color: AppColors.dividerGrey)),
+          ),
+          child: SafeArea(
+            top: false,
+            child: Row(
+              children: [
+                Icon(Icons.hourglass_top, size: 18, color: AppColors.warning),
+                const SizedBox(width: 8),
+                Expanded(
+                  child: Text(
+                    'Waiting for active trip to complete',
+                    style: textTheme.bodySmall?.copyWith(color: AppColors.textSecondary),
+                  ),
+                ),
+              ],
+            ),
+          ),
+        );
+      }
+      return const SizedBox.shrink();
+    }
 
     return Container(
       padding: const EdgeInsets.fromLTRB(14, 10, 14, 14),
@@ -1809,6 +1863,12 @@ class _TripDetailScreenState extends State<TripDetailScreen> {
   }
 
   Widget _buildLocationsCard(TripModel trip, TextTheme textTheme) {
+    final canEditLocations = trip.canUpdateTrip &&
+        (trip.status == AppConstants.tripStatusPlanned ||
+            trip.status == AppConstants.tripStatusActive ||
+            trip.status == AppConstants.tripStatusAccepted ||
+            trip.status == 'PAUSED');
+
     return Card(
       elevation: 0,
       shape: RoundedRectangleBorder(
@@ -1821,33 +1881,79 @@ class _TripDetailScreenState extends State<TripDetailScreen> {
       child: Padding(
         padding: const EdgeInsets.all(16.0),
         child: Column(
+          crossAxisAlignment: CrossAxisAlignment.stretch,
           children: [
-            if (trip.pickupLocation != null)
-              _buildLocationRow(
-                icon: Icons.location_on_outlined,
-                label: 'Pickup',
-                address: trip.pickupLocation!.address ?? 'Location',
-                textTheme: textTheme,
-              ),
-            if (trip.pickupLocation != null && trip.dropLocation != null)
-              const Padding(
-                padding: EdgeInsets.symmetric(vertical: 8.0),
-                child: Icon(
-                  Icons.arrow_downward,
-                  color: AppColors.primary,
+            Row(
+              children: [
+                Expanded(
+                  child: Text(
+                    'Operational locations',
+                    style: textTheme.titleSmall?.copyWith(
+                      fontWeight: FontWeight.w700,
+                      color: AppColors.textPrimary,
+                    ),
+                  ),
                 ),
-              ),
-            if (trip.dropLocation != null)
-              _buildLocationRow(
-                icon: Icons.location_on,
-                label: 'Drop',
-                address: trip.dropLocation!.address ?? 'Location',
-                textTheme: textTheme,
-              ),
+                if (canEditLocations)
+                  IconButton(
+                    tooltip: 'Edit locations',
+                    onPressed: () async {
+                      final updated = await EditTripLocationsSheet.show(context, trip);
+                      if (updated == true && mounted) {
+                        await _loadTrip();
+                        if (_trip != null) {
+                          await _loadRouteIfActive(_trip!);
+                        }
+                      }
+                    },
+                    icon: const Icon(Icons.edit_outlined, size: 20),
+                  ),
+              ],
+            ),
+            const SizedBox(height: 8),
+            ..._buildOperationalLocationRows(trip, textTheme),
           ],
         ),
       ),
     );
+  }
+
+  List<Widget> _buildOperationalLocationRows(TripModel trip, TextTheme textTheme) {
+    final points = TripOperationalLocations.visiblePoints(trip.tripType);
+    final rows = <Widget>[];
+    for (var i = 0; i < points.length; i++) {
+      final point = points[i];
+      final location = TripOperationalLocations.readPoint(trip, point);
+      if (location == null) continue;
+      if (rows.isNotEmpty) {
+        rows.add(
+          const Padding(
+            padding: EdgeInsets.symmetric(vertical: 8.0),
+            child: Icon(
+              Icons.arrow_downward,
+              color: AppColors.primary,
+            ),
+          ),
+        );
+      }
+      rows.add(
+        _buildLocationRow(
+          icon: i == 0 ? Icons.location_on_outlined : Icons.location_on,
+          label: TripOperationalLocations.labelForPoint(trip.tripType, point),
+          address: location.address ?? 'Location',
+          textTheme: textTheme,
+        ),
+      );
+    }
+    if (rows.isEmpty) {
+      rows.add(
+        Text(
+          'No locations set',
+          style: textTheme.bodySmall?.copyWith(color: AppColors.textSecondary),
+        ),
+      );
+    }
+    return rows;
   }
 
   Widget _buildLocationRow({
@@ -2397,12 +2503,7 @@ class _TripDetailScreenState extends State<TripDetailScreen> {
     } catch (e) {
       if (mounted) {
         Navigator.of(context).pop(); // Close loading dialog if still open
-        ScaffoldMessenger.of(context).showSnackBar(
-          SnackBar(
-            content: Text('Error: ${e.toString()}'),
-            backgroundColor: Colors.red,
-          ),
-        );
+        showUserErrorSnackBar(context, e, fallback: 'Failed to share trip');
       }
     }
   }

@@ -4,6 +4,8 @@ import '../core/constants/operating_countries.dart';
 import '../core/constants/app_copy.dart';
 import '../core/theme/app_colors.dart';
 import '../core/utils/helpers.dart';
+import '../core/utils/user_feedback.dart';
+import '../utils/error_utils.dart';
 import '../data/models/transporter_model.dart';
 import '../providers/auth_provider.dart';
 import '../services/transporter_service.dart';
@@ -42,7 +44,7 @@ class _ProfileScreenState extends State<ProfileScreen> {
       });
     } catch (e) {
       setState(() {
-        _error = e.toString().replaceFirst('Exception: ', '');
+        _error = ErrorUtils.userMessage(e);
         _isLoading = false;
       });
     }
@@ -389,14 +391,7 @@ class _ProfileScreenState extends State<ProfileScreen> {
     } catch (e) {
       if (!mounted) return;
       setState(() => _isSavingCountry = false);
-      ScaffoldMessenger.of(context).showSnackBar(
-        SnackBar(
-          content: Text(
-            e.toString().replaceFirst('Exception: ', ''),
-          ),
-          backgroundColor: Colors.red,
-        ),
-      );
+      showUserErrorSnackBar(context, e, fallback: 'Failed to update operating country');
     }
   }
 

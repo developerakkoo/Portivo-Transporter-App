@@ -1,6 +1,7 @@
 import 'package:flutter/foundation.dart';
 import '../data/models/wallet_transaction_model.dart';
 import '../services/wallet_service.dart';
+import '../utils/error_utils.dart';
 
 class WalletProvider with ChangeNotifier {
   final WalletService _walletService = WalletService();
@@ -34,7 +35,7 @@ class WalletProvider with ChangeNotifier {
         print('WalletProvider: Balance loaded: $_balance');
       }
     } catch (e, stackTrace) {
-      _error = e.toString();
+      _error = ErrorUtils.userMessage(e);
       if (kDebugMode) {
         print('WalletProvider: Error loading balance: $e');
         print('Stack: $stackTrace');
@@ -70,7 +71,7 @@ class WalletProvider with ChangeNotifier {
         _transactions.addAll(transactions);
       }
     } catch (e) {
-      _error = e.toString();
+      _error = ErrorUtils.userMessage(e);
       if (kDebugMode) {
         print('WalletProvider: Error loading transactions: $e');
       }
@@ -92,7 +93,7 @@ class WalletProvider with ChangeNotifier {
       }
       return success;
     } catch (e) {
-      _error = e.toString();
+      _error = ErrorUtils.userMessage(e);
       if (kDebugMode) {
         print('WalletProvider: Error adding money: $e');
       }
@@ -124,7 +125,7 @@ class WalletProvider with ChangeNotifier {
       }
       return success;
     } catch (e) {
-      _error = e.toString();
+      _error = ErrorUtils.userMessage(e);
       if (kDebugMode) {
         print('WalletProvider: Error sending money: $e');
       }

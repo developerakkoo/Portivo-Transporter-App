@@ -1,5 +1,44 @@
 import 'trip_model.dart';
 
+/// A preferred route with per-direction rates on a marketplace post.
+/// [exportRate]/[importRate] null => "Negotiable" for that direction.
+class MarketplaceRouteRate {
+  const MarketplaceRouteRate({
+    required this.destination,
+    this.exportRate,
+    this.importRate,
+  });
+
+  final String destination;
+  final num? exportRate;
+  final num? importRate;
+
+  bool get exportNegotiable => exportRate == null;
+  bool get importNegotiable => importRate == null;
+
+  static String _destLabel(dynamic v) {
+    if (v == null) return '';
+    if (v is String) return v.trim();
+    if (v is Map) {
+      return (v['formattedAddress'] ?? v['address'] ?? '').toString().trim();
+    }
+    return '';
+  }
+
+  static num? _rate(dynamic v) => v is num ? v : num.tryParse('$v');
+
+  static MarketplaceRouteRate? fromJson(Map<String, dynamic>? json) {
+    if (json == null) return null;
+    final dest = _destLabel(json['destination']);
+    if (dest.isEmpty) return null;
+    return MarketplaceRouteRate(
+      destination: dest,
+      exportRate: json['exportRate'] == null ? null : _rate(json['exportRate']),
+      importRate: json['importRate'] == null ? null : _rate(json['importRate']),
+    );
+  }
+}
+
 /// Vehicle slot on a marketplace post (VehicleRouteAssignment); [id] is assignment id for bookings.
 class VehiclePostAssignment {
   const VehiclePostAssignment({
@@ -68,6 +107,8 @@ class VehiclePostModel {
     this.pricePerVehicle,
     this.slotsLeft,
     this.availableVehicles = const [],
+    this.routes = const [],
+    this.acceptsOtherDestinations = false,
   });
 
   final String id;
@@ -100,6 +141,12 @@ class VehiclePostModel {
   final num? pricePerVehicle;
   final int? slotsLeft;
   final List<VehiclePostAssignment> availableVehicles;
+
+  /// Preferred routes with per-direction (Export/Import) rates.
+  final List<MarketplaceRouteRate> routes;
+
+  /// Seller accepts inquiries for destinations not listed ("Rate on Request").
+  final bool acceptsOtherDestinations;
 
   /// Count of canonical destination stops on the listing (for `servedStopIndexes` / add vehicles).
   int get destinationStopCount {
@@ -227,6 +274,17 @@ class VehiclePostModel {
       }
     }
 
+    final routesRaw = json['routes'];
+    final routes = <MarketplaceRouteRate>[];
+    if (routesRaw is List) {
+      for (final item in routesRaw) {
+        if (item is Map) {
+          final r = MarketplaceRouteRate.fromJson(Map<String, dynamic>.from(item));
+          if (r != null) routes.add(r);
+        }
+      }
+    }
+
     final ppv = json['pricePerVehicle'];
     final num? pricePerVehicle = ppv is num ? ppv : num.tryParse('$ppv');
     final sl = json['slotsLeft'];
@@ -291,6 +349,8 @@ class VehiclePostModel {
       pricePerVehicle: pricePerVehicle,
       slotsLeft: slotsLeft,
       availableVehicles: assignments,
+      routes: routes,
+      acceptsOtherDestinations: json['acceptsOtherDestinations'] == true,
     );
   }
 }

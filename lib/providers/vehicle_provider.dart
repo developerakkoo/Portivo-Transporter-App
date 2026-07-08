@@ -2,6 +2,7 @@ import 'package:flutter/foundation.dart';
 import '../data/models/vehicle_model.dart';
 import '../data/models/trip_model.dart';
 import '../services/vehicle_service.dart';
+import '../utils/error_utils.dart';
 
 class VehicleProvider with ChangeNotifier {
   final VehicleService _vehicleService = VehicleService();
@@ -43,7 +44,7 @@ class VehicleProvider with ChangeNotifier {
         _vehicles = vehicles;
       }
     } catch (e) {
-      _error = e.toString();
+      _error = ErrorUtils.userMessage(e);
       if (kDebugMode) {
         print('VehicleProvider: Error loading vehicles: $e');
       }
@@ -63,7 +64,7 @@ class VehicleProvider with ChangeNotifier {
       _selectedVehicle = vehicle;
       return vehicle;
     } catch (e) {
-      _error = e.toString();
+      _error = ErrorUtils.userMessage(e);
       if (kDebugMode) {
         print('VehicleProvider: Error getting vehicle: $e');
       }
@@ -86,7 +87,7 @@ class VehicleProvider with ChangeNotifier {
       }
       return vehicle;
     } catch (e) {
-      _error = e.toString();
+      _error = ErrorUtils.userMessage(e);
       if (kDebugMode) {
         print('VehicleProvider: Error creating vehicle: $e');
       }
@@ -116,7 +117,7 @@ class VehicleProvider with ChangeNotifier {
       }
       return false;
     } catch (e) {
-      _error = e.toString();
+      _error = ErrorUtils.userMessage(e);
       if (kDebugMode) {
         print('VehicleProvider: Error updating vehicle: $e');
       }
@@ -142,7 +143,7 @@ class VehicleProvider with ChangeNotifier {
       }
       return success;
     } catch (e) {
-      _error = e.toString();
+      _error = ErrorUtils.userMessage(e);
       if (kDebugMode) {
         print('VehicleProvider: Error deleting vehicle: $e');
       }
@@ -198,7 +199,7 @@ class VehicleProvider with ChangeNotifier {
       }
       return success;
     } catch (e) {
-      _error = e.toString();
+      _error = ErrorUtils.userMessage(e);
       if (kDebugMode) {
         print('VehicleProvider: Error uploading document: $e');
       }

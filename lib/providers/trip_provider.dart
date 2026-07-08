@@ -474,7 +474,7 @@ class TripProvider with ChangeNotifier {
         print('TripProvider: Loaded ${trips.length} trips');
       }
     } catch (e, stackTrace) {
-      _error = ErrorUtils.extractErrorMessage(e);
+      _error = ErrorUtils.userMessage(e);
       if (kDebugMode) {
         print('TripProvider: Error loading trips: $_error');
         print('Stack: $stackTrace');
@@ -508,7 +508,7 @@ class TripProvider with ChangeNotifier {
         print('TripProvider: Loaded ${trips.length} available trips');
       }
     } catch (e, stackTrace) {
-      _error = ErrorUtils.extractErrorMessage(e);
+      _error = ErrorUtils.userMessage(e);
       if (kDebugMode) {
         print('TripProvider: Error loading available trips: $_error');
         print('Stack: $stackTrace');
@@ -566,7 +566,7 @@ class TripProvider with ChangeNotifier {
       final trips = await _tripService.getTripsByStatus(status);
       _tripsByStatus[status] = trips;
     } catch (e) {
-      _error = ErrorUtils.extractErrorMessage(e);
+      _error = ErrorUtils.userMessage(e);
       if (kDebugMode) {
         print('TripProvider: Error loading trips by status: $_error');
       }
@@ -602,7 +602,7 @@ class TripProvider with ChangeNotifier {
       }
       return trip;
     } catch (e) {
-      _error = ErrorUtils.extractErrorMessage(e);
+      _error = ErrorUtils.userMessage(e);
       if (kDebugMode) {
         print('TripProvider: Error loading trip: $_error');
       }
@@ -630,7 +630,7 @@ class TripProvider with ChangeNotifier {
       }
       return trip;
     } catch (e) {
-      _error = ErrorUtils.extractErrorMessage(e);
+      _error = ErrorUtils.userMessage(e);
       if (kDebugMode) {
         print('TripProvider: Error creating trip: $_error');
       }
@@ -654,7 +654,7 @@ class TripProvider with ChangeNotifier {
       }
       return false;
     } catch (e) {
-      _error = ErrorUtils.extractErrorMessage(e);
+      _error = ErrorUtils.userMessage(e);
       if (kDebugMode) {
         print('TripProvider: Error updating trip: $_error');
       }
@@ -678,7 +678,7 @@ class TripProvider with ChangeNotifier {
       }
       return false;
     } catch (e) {
-      _error = ErrorUtils.extractErrorMessage(e);
+      _error = ErrorUtils.userMessage(e);
       if (kDebugMode) {
         print('TripProvider: Error assigning vehicle: $_error');
       }
@@ -702,7 +702,7 @@ class TripProvider with ChangeNotifier {
       }
       return false;
     } catch (e) {
-      _error = ErrorUtils.extractErrorMessage(e);
+      _error = ErrorUtils.userMessage(e);
       if (kDebugMode) {
         print('TripProvider: Error assigning driver: $_error');
       }
@@ -725,7 +725,7 @@ class TripProvider with ChangeNotifier {
       }
       return success;
     } catch (e) {
-      _error = ErrorUtils.extractErrorMessage(e);
+      _error = ErrorUtils.userMessage(e);
       if (kDebugMode) {
         print('TripProvider: Error cancelling trip: $_error');
       }
@@ -750,7 +750,7 @@ class TripProvider with ChangeNotifier {
       }
       return false;
     } catch (e) {
-      _error = ErrorUtils.extractErrorMessage(e);
+      _error = ErrorUtils.userMessage(e);
       if (kDebugMode) {
         print('TripProvider: Error starting trip: $_error');
       }
@@ -774,7 +774,7 @@ class TripProvider with ChangeNotifier {
       }
       return false;
     } catch (e) {
-      _error = ErrorUtils.extractErrorMessage(e);
+      _error = ErrorUtils.userMessage(e);
       if (kDebugMode) {
         print('TripProvider: Error completing trip: $_error');
       }
@@ -798,7 +798,7 @@ class TripProvider with ChangeNotifier {
       }
       return false;
     } catch (e) {
-      _error = ErrorUtils.extractErrorMessage(e);
+      _error = ErrorUtils.userMessage(e);
       if (kDebugMode) {
         print('TripProvider: Error closing trip without POD: $_error');
       }
@@ -817,7 +817,7 @@ class TripProvider with ChangeNotifier {
     try {
       return await _tripService.searchTrips(query: query);
     } catch (e) {
-      _error = ErrorUtils.extractErrorMessage(e);
+      _error = ErrorUtils.userMessage(e);
       if (kDebugMode) {
         print('TripProvider: Error searching trips: $_error');
       }
@@ -838,7 +838,7 @@ class TripProvider with ChangeNotifier {
       _tripsByStatus[AppConstants.tripStatusActive] = trips;
       return trips;
     } catch (e) {
-      _error = ErrorUtils.extractErrorMessage(e);
+      _error = ErrorUtils.userMessage(e);
       if (kDebugMode) {
         print('TripProvider: Error loading active trips: $_error');
       }
@@ -869,7 +869,7 @@ class TripProvider with ChangeNotifier {
       }
       return result;
     } catch (e) {
-      _error = ErrorUtils.extractErrorMessage(e);
+      _error = ErrorUtils.userMessage(e);
       if (kDebugMode) {
         print('TripProvider: Error loading pending POD trips: $_error');
       }
@@ -893,7 +893,7 @@ class TripProvider with ChangeNotifier {
       }
       return false;
     } catch (e) {
-      _error = ErrorUtils.extractErrorMessage(e);
+      _error = ErrorUtils.userMessage(e);
       if (kDebugMode) {
         print('TripProvider: Error uploading POD: $_error');
       }
@@ -917,7 +917,7 @@ class TripProvider with ChangeNotifier {
       }
       return false;
     } catch (e) {
-      _error = ErrorUtils.extractErrorMessage(e);
+      _error = ErrorUtils.userMessage(e);
       if (kDebugMode) {
         print('TripProvider: Error approving POD: $_error');
       }
@@ -936,7 +936,7 @@ class TripProvider with ChangeNotifier {
     try {
       return await _tripService.shareTrip(tripId, expiryHours: expiryHours);
     } catch (e) {
-      _error = ErrorUtils.extractErrorMessage(e);
+      _error = ErrorUtils.userMessage(e);
       if (kDebugMode) {
         print('TripProvider: Error sharing trip: $_error');
       }
@@ -957,7 +957,7 @@ class TripProvider with ChangeNotifier {
     try {
       _draftTrips = await _tripService.listTripDrafts();
     } catch (e) {
-      _error = ErrorUtils.extractErrorMessage(e);
+      _error = ErrorUtils.userMessage(e);
       if (kDebugMode) {
         print('TripProvider: Error loading drafts: $_error');
       }
@@ -988,7 +988,7 @@ class TripProvider with ChangeNotifier {
       }
       return saved;
     } catch (e) {
-      _error = ErrorUtils.extractErrorMessage(e);
+      _error = ErrorUtils.userMessage(e);
       if (kDebugMode) {
         print('TripProvider: Error saving draft: $_error');
       }
@@ -1007,7 +1007,7 @@ class TripProvider with ChangeNotifier {
     try {
       return await _tripService.getTripDraft(id);
     } catch (e) {
-      _error = ErrorUtils.extractErrorMessage(e);
+      _error = ErrorUtils.userMessage(e);
       if (kDebugMode) {
         print('TripProvider: Error loading draft: $_error');
       }
@@ -1015,6 +1015,30 @@ class TripProvider with ChangeNotifier {
     } finally {
       _isLoading = false;
       notifyListeners();
+    }
+  }
+
+  Future<bool> deleteDraft(String id) async {
+    _error = null;
+    notifyListeners();
+
+    try {
+      final success = await _tripService.deleteTripDraft(id);
+      if (success) {
+        _draftTrips.removeWhere((draft) => draft.id == id);
+        notifyListeners();
+        return true;
+      }
+      _error = 'Failed to delete draft';
+      notifyListeners();
+      return false;
+    } catch (e) {
+      _error = ErrorUtils.userMessage(e);
+      if (kDebugMode) {
+        print('TripProvider: Error deleting draft: $_error');
+      }
+      notifyListeners();
+      return false;
     }
   }
 

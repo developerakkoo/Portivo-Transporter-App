@@ -11,6 +11,7 @@ import 'providers/trip_provider.dart';
 import 'providers/notification_provider.dart';
 import 'providers/navigation_state_provider.dart';
 import 'providers/vehicle_provider.dart';
+import 'core/notifications/app_banner_controller.dart';
 import 'providers/vehicle_type_provider.dart';
 import 'providers/customer_provider.dart';
 import 'providers/driver_provider.dart';
@@ -43,6 +44,8 @@ import 'screens/support.dart';
 import 'screens/trip_detail.dart';
 import 'screens/map_screen.dart';
 import 'screens/marketplace/marketplace_screen.dart';
+import 'screens/reports/reports_screen.dart';
+import 'screens/fleet/add_fleet_screen.dart';
 import 'screens/dev/live_tracking_sandbox_screen.dart';
 
 Future<void> main() async {
@@ -219,7 +222,19 @@ class MyApp extends StatelessWidget {
         }),
         ChangeNotifierProvider(create: (_) {
           try {
-            return VehicleTypeProvider();
+            return AppBannerController();
+          } catch (e) {
+            if (kDebugMode) {
+              print('Error creating AppBannerController: $e');
+            }
+            rethrow;
+          }
+        }),
+        ChangeNotifierProvider(create: (context) {
+          try {
+            return VehicleTypeProvider(
+              bannerController: context.read<AppBannerController>(),
+            );
           } catch (e) {
             if (kDebugMode) {
               print('Error creating VehicleTypeProvider: $e');
@@ -373,6 +388,8 @@ class MyApp extends StatelessWidget {
           '/trip-detail': (context) => const TripDetailScreen(),
           '/map': (context) => const MapScreen(),
           '/marketplace': (context) => const MarketplaceScreen(),
+          '/reports': (context) => const ReportsScreen(),
+          '/add-fleet': (context) => const AddFleetScreen(),
         },
       ),
     );

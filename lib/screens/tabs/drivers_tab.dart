@@ -1,7 +1,9 @@
 import 'package:flutter/material.dart';
 import 'package:provider/provider.dart';
 import '../../core/theme/app_colors.dart';
+import '../../core/utils/user_feedback.dart';
 import '../../data/models/driver_model.dart';
+import '../../widgets/open_app_drawer_button.dart';
 import '../../providers/driver_provider.dart';
 import '../../providers/auth_provider.dart';
 import '../../services/permission_service.dart';
@@ -34,6 +36,7 @@ class _DriversTabState extends State<DriversTab> {
           return Scaffold(
             backgroundColor: AppColors.background,
             appBar: AppBar(
+              leading: const OpenAppDrawerButton(),
               title: const Text('Drivers'),
             ),
             body: const Center(child: CircularProgressIndicator()),
@@ -44,6 +47,7 @@ class _DriversTabState extends State<DriversTab> {
           return Scaffold(
             backgroundColor: AppColors.background,
             appBar: AppBar(
+              leading: const OpenAppDrawerButton(),
               title: const Text('Drivers'),
             ),
             body: Center(
@@ -82,6 +86,7 @@ class _DriversTabState extends State<DriversTab> {
         return Scaffold(
           backgroundColor: AppColors.background,
           appBar: AppBar(
+            leading: const OpenAppDrawerButton(),
             title: const Text('Drivers'),
             actions: [
               IconButton(
@@ -195,14 +200,20 @@ class _DriversTabState extends State<DriversTab> {
     final newStatus = granted ? 'active' : 'blocked';
     final updated = await driverProvider.updateDriver(id: driver.id, status: newStatus);
     if (!mounted) return;
-    ScaffoldMessenger.of(context).showSnackBar(
-      SnackBar(
-        content: Text(updated != null
-            ? (granted ? 'Access granted to ${driver.name ?? 'driver'}' : '${driver.name ?? 'Driver'} has been blocked')
-            : driverProvider.error ?? 'Failed to update driver'),
-        backgroundColor: updated != null ? AppColors.success : AppColors.error,
-      ),
-    );
+    if (updated != null) {
+      showUserSuccessSnackBar(
+        context,
+        granted
+            ? 'Access granted to ${driver.name ?? 'driver'}'
+            : '${driver.name ?? 'Driver'} has been blocked',
+      );
+    } else {
+      showUserErrorSnackBar(
+        context,
+        driverProvider.error,
+        fallback: 'Failed to update driver',
+      );
+    }
   }
 
   Widget _buildDriverCard(DriverModel driver, TextTheme textTheme, DriverProvider driverProvider) {
@@ -330,12 +341,15 @@ class _DriversTabState extends State<DriversTab> {
                   if (confirmed == true && mounted) {
                     final success = await driverProvider.deleteDriver(driver.id);
                     if (mounted) {
-                      ScaffoldMessenger.of(context).showSnackBar(
-                        SnackBar(
-                          content: Text(success ? 'Driver deleted successfully' : driverProvider.error ?? 'Failed to delete driver'),
-                          backgroundColor: success ? Colors.green : Colors.red,
-                        ),
-                      );
+                      if (success) {
+                        showUserSuccessSnackBar(context, 'Driver deleted successfully');
+                      } else {
+                        showUserErrorSnackBar(
+                          context,
+                          driverProvider.error,
+                          fallback: 'Failed to delete driver',
+                        );
+                      }
                     }
                   }
                 }

@@ -54,11 +54,11 @@ class Validators {
     if (normalized.isEmpty) {
       return 'Vehicle number is required';
     }
-    if (normalized.length != 10) {
-      return 'Vehicle number must be exactly 10 characters (e.g. MH12AB3434)';
+    if (normalized.length != 9 && normalized.length != 10) {
+      return 'Vehicle number must be 9 or 10 characters (e.g. MH01A1234 or MH12AB3434)';
     }
-    if (!RegExp(r'^[A-Z]{2}[0-9]{2}[A-Z]{2}[0-9]{4}$').hasMatch(normalized)) {
-      return 'Use format: state code, district (2 digits), series (2 letters), number (4 digits)';
+    if (!RegExp(r'^[A-Z]{2}[0-9]{2}[A-Z]{1,2}[0-9]{4}$').hasMatch(normalized)) {
+      return 'Use format: state code, district (2 digits), series (1-2 letters), number (4 digits)';
     }
     return null;
   }

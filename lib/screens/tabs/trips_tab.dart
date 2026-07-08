@@ -4,9 +4,11 @@ import '../../core/constants/app_copy.dart';
 import '../../core/theme/app_colors.dart';
 import '../../core/constants/app_constants.dart';
 import '../../data/models/trip_model.dart';
+import '../../core/utils/user_feedback.dart';
 import '../../providers/trip_provider.dart';
 import '../../providers/pinned_trips_provider.dart';
 import '../../providers/navigation_state_provider.dart';
+import '../../widgets/open_app_drawer_button.dart';
 import '../../widgets/trip_expansion_card.dart';
 import '../../providers/auth_provider.dart';
 import '../../services/socket_service.dart';
@@ -159,6 +161,7 @@ class _TripsTabState extends State<TripsTab>
     return Scaffold(
       backgroundColor: AppColors.background,
       appBar: AppBar(
+        leading: const OpenAppDrawerButton(),
         title: const Text('Trips'),
         actions: [
           Consumer<AuthProvider>(
@@ -494,12 +497,7 @@ class _TripsTabState extends State<TripsTab>
       }
     } catch (e) {
       if (mounted) {
-        ScaffoldMessenger.of(context).showSnackBar(
-          SnackBar(
-            content: Text('Error: ${e.toString()}'),
-            backgroundColor: AppColors.error,
-          ),
-        );
+        showUserErrorSnackBar(context, e);
       }
     }
   }
@@ -521,12 +519,7 @@ class _TripsTabState extends State<TripsTab>
       }
     } catch (e) {
       if (mounted) {
-        ScaffoldMessenger.of(context).showSnackBar(
-          SnackBar(
-            content: Text('Error: ${e.toString()}'),
-            backgroundColor: AppColors.error,
-          ),
-        );
+        showUserErrorSnackBar(context, e);
       }
     }
   }
@@ -545,12 +538,7 @@ class _TripsTabState extends State<TripsTab>
       }
     } catch (e) {
       if (mounted) {
-        ScaffoldMessenger.of(context).showSnackBar(
-          SnackBar(
-            content: Text('Error: ${e.toString()}'),
-            backgroundColor: AppColors.error,
-          ),
-        );
+        showUserErrorSnackBar(context, e);
       }
     }
   }

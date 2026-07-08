@@ -7,6 +7,14 @@ import 'api_service.dart';
 class DriverService {
   final ApiService _api = ApiService();
 
+  Never _throwApiFailure(dynamic data, {required String fallback}) {
+    if (data is Map) {
+      final message = data['message']?.toString();
+      throw Exception(message ?? fallback);
+    }
+    throw Exception(fallback);
+  }
+
   Future<List<DriverModel>> getDriversByTransporter(
     String transporterId, {
     bool availableForTrip = false,
@@ -110,7 +118,7 @@ class DriverService {
           return DriverModel.fromJson(data);
         }
       }
-      return null;
+      _throwApiFailure(response.data, fallback: 'Failed to create driver');
     } catch (e, stackTrace) {
       if (kDebugMode) {
         print('DriverService: Error creating driver: $e');
@@ -148,7 +156,7 @@ class DriverService {
           return DriverModel.fromJson(data);
         }
       }
-      return null;
+      _throwApiFailure(response.data, fallback: 'Failed to update driver');
     } catch (e, stackTrace) {
       if (kDebugMode) {
         print('DriverService: Error updating driver: $e');
@@ -166,7 +174,10 @@ class DriverService {
 
       final response = await _api.delete(ApiConfig.driverById(id));
 
-      return response.data['success'] == true;
+      if (response.data['success'] == true) {
+        return true;
+      }
+      _throwApiFailure(response.data, fallback: 'Failed to delete driver');
     } catch (e, stackTrace) {
       if (kDebugMode) {
         print('DriverService: Error deleting driver: $e');

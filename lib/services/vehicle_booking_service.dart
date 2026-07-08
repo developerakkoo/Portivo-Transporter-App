@@ -18,14 +18,23 @@ class VehicleBookingService {
   }
 
   /// Creates a DRAFT booking or returns existing (same post + assignment). POST 201 / 200.
+  /// [direction] is 'EXPORT' or 'IMPORT'; [routeIndex] indexes the post's routes
+  /// (-1 for the "Any Other Destination" negotiable catch-all).
   Future<Map<String, dynamic>> createOrGetBooking({
     required String postId,
     required String assignmentId,
+    String? direction,
+    int? routeIndex,
   }) async {
     try {
       final response = await _api.post(
         ApiConfig.vehicleBookings,
-        data: {'postId': postId, 'assignmentId': assignmentId},
+        data: {
+          'postId': postId,
+          'assignmentId': assignmentId,
+          if (direction != null) 'direction': direction,
+          if (routeIndex != null) 'routeIndex': routeIndex,
+        },
       );
       final body = response.data;
       if (body is! Map || body['success'] != true) {

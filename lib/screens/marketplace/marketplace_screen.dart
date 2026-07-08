@@ -1,24 +1,26 @@
-import 'dart:math' as math;
-
 import 'package:flutter/material.dart';
 import 'package:intl/intl.dart';
 import 'package:provider/provider.dart';
 
 import '../../core/theme/app_colors.dart';
 import '../../core/utils/helpers.dart';
-import '../../core/utils/validators.dart';
+import '../../core/utils/user_feedback.dart';
+import '../../utils/error_utils.dart';
 import '../../data/models/marketplace_chat_models.dart';
+import '../../data/models/vehicle_model.dart';
 import '../../data/models/vehicle_post_model.dart';
 import '../../providers/auth_provider.dart';
 import '../../providers/marketplace_chat_provider.dart';
 import '../../providers/vehicle_provider.dart';
 import '../../providers/vehicle_type_provider.dart';
+import '../../services/socket_service.dart';
 import '../../services/vehicle_booking_service.dart';
 import '../../services/vehicle_post_service.dart';
 import '../../utils/marketplace_chat_initials.dart';
 import '../../widgets/searchable_vehicle_type_picker.dart';
 import 'edit_vehicle_post_screen.dart';
 import 'marketplace_chat_screen.dart';
+import 'route_rate_editor.dart';
 import 'vehicle_post_detail_screen.dart';
 
 class MarketplaceScreen extends StatefulWidget {
@@ -46,7 +48,7 @@ class _MarketplaceScreenState extends State<MarketplaceScreen> {
       child: Scaffold(
         backgroundColor: AppColors.background,
         appBar: AppBar(
-          title: const Text('Marketplace'),
+          title: const Text('Network'),
           backgroundColor: AppColors.background,
           foregroundColor: AppColors.textPrimary,
           elevation: 0,
@@ -122,6 +124,9 @@ class _MarketplaceSearchTabState extends State<_MarketplaceSearchTab> {
   String? _vehicleType;
   DateTime _filterDate = DateTime.now();
 
+  /// Display-only rate direction filter for the results list: 'ALL' / 'EXPORT' / 'IMPORT'.
+  String _rateDirection = 'ALL';
+
   bool _loading = false;
   bool _loadingMore = false;
   String? _error;
@@ -131,9 +136,70 @@ class _MarketplaceSearchTabState extends State<_MarketplaceSearchTab> {
   static const int _pageSize = 20;
   final ScrollController _searchScrollController = ScrollController();
   final GlobalKey _searchResultsKey = GlobalKey();
+  final SocketService _socket = SocketService();
+  late final void Function(Map<String, dynamic>) _vehiclePostListener;
+  late final void Function(Map<String, dynamic>) _bookingConfirmedListener;
+
+  @override
+  void initState() {
+    super.initState();
+    _vehiclePostListener = _onVehiclePostSocket;
+    _bookingConfirmedListener = _onBookingConfirmedSocket;
+    _socket.addVehiclePostListener(_vehiclePostListener);
+    _socket.addMarketplaceBookingLifecycleListener(_bookingConfirmedListener);
+  }
+
+  List<VehiclePostModel> _visibleResults(List<VehiclePostModel> results, AuthProvider auth) {
+    return results
+        .where((p) => _isOwnPost(p, auth) || p.availableVehicles.isNotEmpty)
+        .toList();
+  }
+
+  void _removePostFromResults(String postId) {
+    final before = _results.length;
+    _results.removeWhere((p) => p.id == postId);
+    if (_results.length < before && _total > 0) {
+      _total -= 1;
+    }
+  }
+
+  void _onVehiclePostSocket(Map<String, dynamic> payload) {
+    if (!mounted) return;
+    final post = payload['post'];
+    if (post is! Map) return;
+    final postId = post['id']?.toString() ?? post['_id']?.toString();
+    if (postId == null || postId.isEmpty) return;
+
+    final status = post['status']?.toString().toLowerCase();
+    final slotsLeft = post['slotsLeft'];
+    final inventoryCount = post['bookableInventoryCount'];
+    final noInventory = status == 'fulfilled' ||
+        (slotsLeft is num && slotsLeft <= 0) ||
+        (inventoryCount is num && inventoryCount <= 0);
+
+    if (!noInventory) return;
+
+    setState(() {
+      _removePostFromResults(postId);
+    });
+  }
+
+  void _onBookingConfirmedSocket(Map<String, dynamic> payload) {
+    if (!mounted) return;
+    final booking = payload['booking'];
+    if (booking is! Map) return;
+    final postId = booking['postId']?.toString();
+    if (postId == null || postId.isEmpty) return;
+
+    setState(() {
+      _removePostFromResults(postId);
+    });
+  }
 
   @override
   void dispose() {
+    _socket.removeVehiclePostListener(_vehiclePostListener);
+    _socket.removeMarketplaceBookingLifecycleListener(_bookingConfirmedListener);
     _originCtrl.dispose();
     _destCtrl.dispose();
     _searchScrollController.dispose();
@@ -219,7 +285,7 @@ class _MarketplaceSearchTabState extends State<_MarketplaceSearchTab> {
     } catch (e) {
       if (!mounted) return;
       setState(() {
-        _error = e.toString().replaceFirst('Exception: ', '');
+        _error = ErrorUtils.userMessage(e);
         _loading = false;
         _loadingMore = false;
         if (!loadMore) {
@@ -261,6 +327,137 @@ class _MarketplaceSearchTabState extends State<_MarketplaceSearchTab> {
           },
         ),
       ),
+    );
+  }
+
+  static final NumberFormat _inrCompact = NumberFormat.decimalPattern('en_IN');
+
+  String _rateText(num? rate) =>
+      rate == null ? 'Negotiable' : '₹ ${_inrCompact.format(rate)}';
+
+  /// Per-route rate line for a result card, honoring the selected direction filter.
+  String _routeRateLine(MarketplaceRouteRate r) {
+    switch (_rateDirection) {
+      case 'EXPORT':
+        return '${r.destination} — Export: ${_rateText(r.exportRate)}';
+      case 'IMPORT':
+        return '${r.destination} — Import: ${_rateText(r.importRate)}';
+      default:
+        return '${r.destination} — Exp ${_rateText(r.exportRate)} · Imp ${_rateText(r.importRate)}';
+    }
+  }
+
+  /// Prompts the buyer to choose a destination route + direction (Export/Import).
+  /// Returns null if cancelled. For legacy posts without routes, resolves to a
+  /// default catch-all choice without showing UI.
+  Future<_RouteDirectionChoice?> _pickRouteDirection(
+    BuildContext context,
+    VehiclePostModel p,
+  ) async {
+    final hasRoutes = p.routes.isNotEmpty;
+    if (!hasRoutes && !p.acceptsOtherDestinations) {
+      return _RouteDirectionChoice(
+        routeIndex: -1,
+        direction: 'EXPORT',
+        rate: p.pricePerVehicle,
+        destinationLabel: p.destination ?? 'Route',
+      );
+    }
+
+    final textTheme = Theme.of(context).textTheme;
+    // Honor the search direction filter: only offer the relevant direction(s).
+    final showExport = _rateDirection != 'IMPORT';
+    final showImport = _rateDirection != 'EXPORT';
+    return showModalBottomSheet<_RouteDirectionChoice>(
+      context: context,
+      backgroundColor: AppColors.background,
+      isScrollControlled: true,
+      showDragHandle: true,
+      shape: const RoundedRectangleBorder(
+        borderRadius: BorderRadius.vertical(top: Radius.circular(16)),
+      ),
+      builder: (ctx) {
+        Widget dirTile(String dest, int routeIndex, String direction, num? rate) {
+          return ListTile(
+            dense: true,
+            leading: Icon(
+              direction == 'EXPORT'
+                  ? Icons.north_east
+                  : Icons.south_west,
+              size: 20,
+              color: AppColors.primary,
+            ),
+            title: Text('$direction · ${_rateText(rate)}'),
+            onTap: () => Navigator.pop(
+              ctx,
+              _RouteDirectionChoice(
+                routeIndex: routeIndex,
+                direction: direction,
+                rate: rate,
+                destinationLabel: dest,
+              ),
+            ),
+          );
+        }
+
+        return SafeArea(
+          child: SingleChildScrollView(
+            child: Padding(
+              padding: const EdgeInsets.fromLTRB(16, 0, 16, 16),
+              child: Column(
+                mainAxisSize: MainAxisSize.min,
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  Text(
+                    'Choose destination & direction',
+                    style: textTheme.titleMedium?.copyWith(
+                      fontWeight: FontWeight.w600,
+                    ),
+                  ),
+                  const SizedBox(height: 8),
+                  ...List.generate(p.routes.length, (i) {
+                    final r = p.routes[i];
+                    return Column(
+                      crossAxisAlignment: CrossAxisAlignment.start,
+                      children: [
+                        Padding(
+                          padding: const EdgeInsets.only(top: 8),
+                          child: Text(
+                            r.destination,
+                            style: textTheme.titleSmall?.copyWith(
+                              fontWeight: FontWeight.w600,
+                            ),
+                          ),
+                        ),
+                        if (showExport)
+                          dirTile(r.destination, i, 'EXPORT', r.exportRate),
+                        if (showImport)
+                          dirTile(r.destination, i, 'IMPORT', r.importRate),
+                        const Divider(height: 8),
+                      ],
+                    );
+                  }),
+                  if (p.acceptsOtherDestinations) ...[
+                    Padding(
+                      padding: const EdgeInsets.only(top: 8),
+                      child: Text(
+                        'Any Other Destination',
+                        style: textTheme.titleSmall?.copyWith(
+                          fontWeight: FontWeight.w600,
+                        ),
+                      ),
+                    ),
+                    if (showExport)
+                      dirTile('Any Other Destination', -1, 'EXPORT', null),
+                    if (showImport)
+                      dirTile('Any Other Destination', -1, 'IMPORT', null),
+                  ],
+                ],
+              ),
+            ),
+          ),
+        );
+      },
     );
   }
 
@@ -313,6 +510,8 @@ class _MarketplaceSearchTabState extends State<_MarketplaceSearchTab> {
   Future<void> _startChat(BuildContext context, VehiclePostModel p) async {
     final auth = context.read<AuthProvider>();
     if (_isOwnPost(p, auth)) return;
+    final choice = await _pickRouteDirection(context, p);
+    if (choice == null || !context.mounted) return;
     final assignment = await _pickAssignment(context, p);
     if (assignment == null || !context.mounted) return;
     try {
@@ -320,6 +519,8 @@ class _MarketplaceSearchTabState extends State<_MarketplaceSearchTab> {
       final bookingMap = await bookingSvc.createOrGetBooking(
         postId: p.id,
         assignmentId: assignment.id,
+        direction: choice.direction,
+        routeIndex: choice.routeIndex,
       );
       final bookingId = bookingMap['id']?.toString() ?? bookingMap['_id']?.toString();
       if (bookingId == null) throw Exception('Invalid booking');
@@ -347,18 +548,18 @@ class _MarketplaceSearchTabState extends State<_MarketplaceSearchTab> {
       }
     } catch (e) {
       if (!context.mounted) return;
-      ScaffoldMessenger.of(context).showSnackBar(
-        SnackBar(content: Text(e.toString().replaceFirst('Exception: ', ''))),
-      );
+      showUserErrorSnackBar(context, e);
     }
   }
 
   Future<void> _openNegotiate(BuildContext context, VehiclePostModel p) async {
     final auth = context.read<AuthProvider>();
     if (_isOwnPost(p, auth)) return;
+    final choice = await _pickRouteDirection(context, p);
+    if (choice == null || !context.mounted) return;
     final assignment = await _pickAssignment(context, p);
     if (assignment == null || !context.mounted) return;
-    final listed = assignment.price ?? p.pricePerVehicle;
+    final listed = choice.rate ?? assignment.price ?? p.pricePerVehicle;
     final result = await showDialog<_MarketplaceListNegotiateResult>(
       context: context,
       builder: (ctx) => _MarketplaceListNegotiateDialog(referencePrice: listed),
@@ -369,6 +570,8 @@ class _MarketplaceSearchTabState extends State<_MarketplaceSearchTab> {
       final bookingMap = await bookingSvc.createOrGetBooking(
         postId: p.id,
         assignmentId: assignment.id,
+        direction: choice.direction,
+        routeIndex: choice.routeIndex,
       );
       final bookingId = bookingMap['id']?.toString() ?? bookingMap['_id']?.toString();
       if (bookingId == null) throw Exception('Invalid booking');
@@ -384,9 +587,7 @@ class _MarketplaceSearchTabState extends State<_MarketplaceSearchTab> {
       );
     } catch (e) {
       if (!context.mounted) return;
-      ScaffoldMessenger.of(context).showSnackBar(
-        SnackBar(content: Text(e.toString().replaceFirst('Exception: ', ''))),
-      );
+      showUserErrorSnackBar(context, e);
     }
   }
 
@@ -395,6 +596,7 @@ class _MarketplaceSearchTabState extends State<_MarketplaceSearchTab> {
     final textTheme = Theme.of(context).textTheme;
     final dateFmt = DateFormat.yMMMd();
     final auth = context.watch<AuthProvider>();
+    final visibleResults = _visibleResults(_results, auth);
 
     return SafeArea(
       child: RefreshIndicator(
@@ -475,6 +677,25 @@ class _MarketplaceSearchTabState extends State<_MarketplaceSearchTab> {
           const SizedBox(height: 12),
           Padding(
             padding: const EdgeInsets.symmetric(horizontal: 20),
+            child: SizedBox(
+              width: double.infinity,
+              child: SegmentedButton<String>(
+                segments: const [
+                  ButtonSegment(value: 'ALL', label: Text('All')),
+                  ButtonSegment(value: 'EXPORT', label: Text('Export')),
+                  ButtonSegment(value: 'IMPORT', label: Text('Import')),
+                ],
+                selected: {_rateDirection},
+                showSelectedIcon: false,
+                onSelectionChanged: (selection) {
+                  setState(() => _rateDirection = selection.first);
+                },
+              ),
+            ),
+          ),
+          const SizedBox(height: 12),
+          Padding(
+            padding: const EdgeInsets.symmetric(horizontal: 20),
             child: OutlinedButton.icon(
               onPressed: _pickDate,
               icon: const Icon(Icons.calendar_today, size: 18),
@@ -514,7 +735,7 @@ class _MarketplaceSearchTabState extends State<_MarketplaceSearchTab> {
                 ],
               ),
             ),
-            if (_results.isNotEmpty)
+            if (visibleResults.isNotEmpty)
               SliverToBoxAdapter(
                 key: _searchResultsKey,
                 child: Padding(
@@ -527,7 +748,7 @@ class _MarketplaceSearchTabState extends State<_MarketplaceSearchTab> {
                   ),
                 ),
               ),
-            if (_results.isEmpty && !_loading)
+            if (_results.isEmpty && visibleResults.isEmpty && !_loading)
               SliverFillRemaining(
                 hasScrollBody: false,
                 child: Center(
@@ -545,13 +766,13 @@ class _MarketplaceSearchTabState extends State<_MarketplaceSearchTab> {
                   ),
                 ),
               ),
-            if (_results.isNotEmpty)
+            if (visibleResults.isNotEmpty)
               SliverPadding(
                 padding: const EdgeInsets.fromLTRB(20, 0, 20, 24),
                 sliver: SliverList(
                   delegate: SliverChildBuilderDelegate(
                     (context, i) {
-                      if (i == _results.length) {
+                      if (i == visibleResults.length) {
                         return Padding(
                           padding: const EdgeInsets.only(top: 8, bottom: 24),
                           child: Center(
@@ -568,7 +789,7 @@ class _MarketplaceSearchTabState extends State<_MarketplaceSearchTab> {
                           ),
                         );
                       }
-                      final p = _results[i];
+                      final p = visibleResults[i];
                       final own = _isOwnPost(p, auth);
                       return Card(
                         margin: const EdgeInsets.only(bottom: 12),
@@ -638,6 +859,38 @@ class _MarketplaceSearchTabState extends State<_MarketplaceSearchTab> {
                                           fontWeight: FontWeight.w500,
                                         ),
                                       ),
+                                    if (p.routes.isNotEmpty)
+                                      Padding(
+                                        padding:
+                                            const EdgeInsets.only(top: 4),
+                                        child: Column(
+                                          crossAxisAlignment:
+                                              CrossAxisAlignment.start,
+                                          children: p.routes
+                                              .take(3)
+                                              .map(
+                                                (r) => Text(
+                                                  _routeRateLine(r),
+                                                  style: textTheme.labelSmall
+                                                      ?.copyWith(
+                                                    color: AppColors
+                                                        .textSecondary,
+                                                  ),
+                                                  maxLines: 1,
+                                                  overflow:
+                                                      TextOverflow.ellipsis,
+                                                ),
+                                              )
+                                              .toList(),
+                                        ),
+                                      ),
+                                    if (p.acceptsOtherDestinations)
+                                      Text(
+                                        'Any other destination · Negotiable',
+                                        style: textTheme.labelSmall?.copyWith(
+                                          color: AppColors.textSecondary,
+                                        ),
+                                      ),
                                     const SizedBox(height: 4),
                                     Text(
                                       'Tap for details',
@@ -699,7 +952,7 @@ class _MarketplaceSearchTabState extends State<_MarketplaceSearchTab> {
                       );
                     },
                     childCount:
-                        _results.length + (_results.length < _total ? 1 : 0),
+                        visibleResults.length + (_results.length < _total ? 1 : 0),
                   ),
                 ),
               ),
@@ -934,13 +1187,7 @@ class _MarketplaceChatsTabState extends State<_MarketplaceChatsTab> {
                 onDismissed: (_) {
                   chat.hideConversation(c.booking.id, actorId: self).catchError((e, _) {
                     if (context.mounted) {
-                      ScaffoldMessenger.of(context).showSnackBar(
-                        SnackBar(
-                          content: Text(
-                            e.toString().replaceFirst('Exception: ', ''),
-                          ),
-                        ),
-                      );
+                      showUserErrorSnackBar(context, e);
                     }
                   });
                 },
@@ -1056,6 +1303,21 @@ class _MarketplaceChatsTabState extends State<_MarketplaceChatsTab> {
   }
 }
 
+/// Buyer's chosen destination route + direction for a booking.
+class _RouteDirectionChoice {
+  const _RouteDirectionChoice({
+    required this.routeIndex,
+    required this.direction,
+    required this.rate,
+    required this.destinationLabel,
+  });
+
+  final int routeIndex;
+  final String direction;
+  final num? rate;
+  final String destinationLabel;
+}
+
 class _MarketplacePostTab extends StatefulWidget {
   const _MarketplacePostTab();
 
@@ -1064,25 +1326,21 @@ class _MarketplacePostTab extends StatefulWidget {
 }
 
 class _MarketplacePostTabState extends State<_MarketplacePostTab> {
-  static const int _kMaxDestinations = 10;
+  static const int _kDefaultDurationDays = 30;
 
   final _formKey = GlobalKey<FormState>();
   final _originCtrl = TextEditingController();
-  final _durationDaysCtrl = TextEditingController(text: '7');
-  final _quantityCtrl = TextEditingController(text: '1');
-  final _pricePerVehicleCtrl = TextEditingController();
-  final _noteCtrl = TextEditingController();
   final _service = VehiclePostService();
-
-  final List<TextEditingController> _destControllers = [];
-  final List<TextEditingController> _destQtyControllers = [];
 
   String? _vehicleType;
   DateTime _availableFrom = DateTime.now();
-  DateTime? _availableTo;
-  bool _useEndDate = false;
+  int _availableVehicles = 1;
+  final List<RouteDraft> _routes = [];
+  bool _acceptsOtherDestinations = false;
   final Set<String> _selectedFleetVehicleIds = {};
   bool _submitting = false;
+
+  static final NumberFormat _inrFmt = NumberFormat.decimalPattern('en_IN');
 
   @override
   void initState() {
@@ -1101,18 +1359,6 @@ class _MarketplacePostTabState extends State<_MarketplacePostTab> {
   @override
   void dispose() {
     _originCtrl.dispose();
-    for (final c in _destControllers) {
-      c.dispose();
-    }
-    for (final c in _destQtyControllers) {
-      c.dispose();
-    }
-    _destControllers.clear();
-    _destQtyControllers.clear();
-    _durationDaysCtrl.dispose();
-    _quantityCtrl.dispose();
-    _pricePerVehicleCtrl.dispose();
-    _noteCtrl.dispose();
     super.dispose();
   }
 
@@ -1126,143 +1372,28 @@ class _MarketplacePostTabState extends State<_MarketplacePostTab> {
     if (picked != null) setState(() => _availableFrom = picked);
   }
 
-  Future<void> _pickTo() async {
-    final picked = await showDatePicker(
-      context: context,
-      initialDate: _availableTo ?? _availableFrom.add(const Duration(days: 7)),
-      firstDate: _availableFrom,
-      lastDate: DateTime.now().add(const Duration(days: 365 * 3)),
-    );
-    if (picked != null) setState(() => _availableTo = picked);
-  }
+  String _rateLabel(num? rate) =>
+      rate == null ? 'Negotiable' : '₹ ${_inrFmt.format(rate)}';
 
-  void _addDestField() {
-    if (_destControllers.length >= _kMaxDestinations) return;
+  Future<void> _addOrEditRoute({int? index}) async {
+    final existing = index == null ? null : _routes[index];
+    final result = await showRouteRateEditor(context, initial: existing);
+    if (result == null || !mounted) return;
     setState(() {
-      _destControllers.add(TextEditingController());
-      _destQtyControllers.add(TextEditingController(text: '1'));
+      if (index == null) {
+        _routes.add(result);
+      } else {
+        _routes[index] = result;
+      }
     });
   }
 
-  void _removeDestField(int i) {
-    if (i < 0 || i >= _destControllers.length) return;
-    setState(() {
-      _destControllers[i].dispose();
-      _destQtyControllers[i].dispose();
-      _destControllers.removeAt(i);
-      _destQtyControllers.removeAt(i);
-    });
-  }
-
-  List<String> _destinationAddresses() {
-    return _destControllers
-        .map((c) => c.text.trim())
-        .where((s) => s.isNotEmpty)
-        .toList();
-  }
-
-  int _destinationSlotsTotalPreview() {
-    var t = 0;
-    for (var i = 0; i < _destControllers.length; i++) {
-      if (_destControllers[i].text.trim().isEmpty) continue;
-      t += int.tryParse(_destQtyControllers[i].text.trim()) ?? 0;
-    }
-    return t;
+  void _removeRoute(int index) {
+    setState(() => _routes.removeAt(index));
   }
 
   Future<void> _submit() async {
     if (!_formKey.currentState!.validate()) return;
-
-    int? durationDays;
-    DateTime? to = _availableTo;
-
-    if (_useEndDate) {
-      if (to == null) {
-        ScaffoldMessenger.of(context).showSnackBar(
-          const SnackBar(content: Text('Select an end date')),
-        );
-        return;
-      }
-    } else {
-      durationDays = int.tryParse(_durationDaysCtrl.text.trim());
-      if (durationDays == null || durationDays < 1) {
-        ScaffoldMessenger.of(context).showSnackBar(
-          const SnackBar(content: Text('Enter duration in days (1 or more)')),
-        );
-        return;
-      }
-      to = null;
-    }
-
-    if (_originCtrl.text.trim().isEmpty) {
-      ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(content: Text('Enter origin')),
-      );
-      return;
-    }
-    final destLines = _destinationAddresses();
-    if (destLines.length > _kMaxDestinations) {
-      ScaffoldMessenger.of(context).showSnackBar(
-        SnackBar(
-          content: Text('At most $_kMaxDestinations destinations'),
-        ),
-      );
-      return;
-    }
-
-    final fleetCount = _selectedFleetVehicleIds.length;
-
-    late final List<int> destinationQuantities;
-    if (destLines.isEmpty) {
-      final base = int.tryParse(_quantityCtrl.text.trim());
-      if (base == null || base < 1) {
-        ScaffoldMessenger.of(context).showSnackBar(
-          const SnackBar(content: Text('Enter vehicle slots (1 or more)')),
-        );
-        return;
-      }
-      destinationQuantities = [math.max(fleetCount, base)];
-    } else {
-      destinationQuantities = [];
-      for (var i = 0; i < _destControllers.length; i++) {
-        if (_destControllers[i].text.trim().isEmpty) continue;
-        final q = int.tryParse(_destQtyControllers[i].text.trim()) ?? 0;
-        destinationQuantities.add(q);
-      }
-      if (destinationQuantities.length != destLines.length) {
-        ScaffoldMessenger.of(context).showSnackBar(
-          const SnackBar(content: Text('Each destination needs a quantity')),
-        );
-        return;
-      }
-      if (destinationQuantities.any((q) => q < 0)) {
-        ScaffoldMessenger.of(context).showSnackBar(
-          const SnackBar(
-            content: Text('Quantities must be non-negative integers'),
-          ),
-        );
-        return;
-      }
-      final sumSlots = destinationQuantities.fold<int>(0, (a, b) => a + b);
-      if (sumSlots < 1) {
-        ScaffoldMessenger.of(context).showSnackBar(
-          const SnackBar(
-            content: Text('At least one destination must have quantity ≥ 1'),
-          ),
-        );
-        return;
-      }
-      if (fleetCount > sumSlots) {
-        ScaffoldMessenger.of(context).showSnackBar(
-          SnackBar(
-            content: Text(
-              'Total slots ($sumSlots) must be at least the number of fleet vehicles selected ($fleetCount).',
-            ),
-          ),
-        );
-        return;
-      }
-    }
 
     if (_vehicleType == null || _vehicleType!.isEmpty) {
       ScaffoldMessenger.of(context).showSnackBar(
@@ -1270,21 +1401,60 @@ class _MarketplacePostTabState extends State<_MarketplacePostTab> {
       );
       return;
     }
+    if (_originCtrl.text.trim().isEmpty) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(content: Text('Enter your current location')),
+      );
+      return;
+    }
+    if (_availableVehicles < 1) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(content: Text('Available vehicles must be at least 1')),
+      );
+      return;
+    }
+    if (_routes.isEmpty && !_acceptsOtherDestinations) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(
+          content: Text(
+            'Add at least one route or enable "Any Other Destination"',
+          ),
+        ),
+      );
+      return;
+    }
+    final fleetCount = _selectedFleetVehicleIds.length;
+    if (fleetCount > _availableVehicles) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(
+          content: Text(
+            'Available vehicles ($_availableVehicles) must be at least the fleet vehicles selected ($fleetCount).',
+          ),
+        ),
+      );
+      return;
+    }
+
+    final routes = _routes
+        .map(
+          (r) => MarketplaceRouteRate(
+            destination: r.destination,
+            exportRate: r.exportRate,
+            importRate: r.importRate,
+          ),
+        )
+        .toList();
 
     setState(() => _submitting = true);
     try {
       VehiclePostModel? created = await _service.create(
         vehicleType: _vehicleType!,
         originAddress: _originCtrl.text.trim(),
-        destinationAddresses: destLines,
-        destinationQuantities: destinationQuantities,
         availableFrom: _availableFrom,
-        availableTo: _useEndDate ? to : null,
-        durationDays: _useEndDate ? null : durationDays,
-        vehicleId: null,
-        note: _noteCtrl.text.trim().isEmpty ? null : _noteCtrl.text.trim(),
-        pricePerVehicle:
-            Validators.parseOptionalListingPriceInr(_pricePerVehicleCtrl.text),
+        durationDays: _kDefaultDurationDays,
+        quantity: _availableVehicles,
+        routes: routes,
+        acceptsOtherDestinations: _acceptsOtherDestinations,
       );
       if (created != null && _selectedFleetVehicleIds.isNotEmpty) {
         final n = created.destinationStopCount;
@@ -1304,7 +1474,7 @@ class _MarketplacePostTabState extends State<_MarketplacePostTab> {
         SnackBar(
           content: Text(
             isDraftAfter
-                ? 'Listing saved as draft. Add fleet vehicles to publish it to the marketplace.'
+                ? 'Availability saved. Attach a fleet vehicle to publish it to the marketplace.'
                 : 'Availability posted.',
           ),
         ),
@@ -1322,32 +1492,18 @@ class _MarketplacePostTabState extends State<_MarketplacePostTab> {
       }
       _formKey.currentState!.reset();
       _originCtrl.clear();
-      for (final c in _destControllers) {
-        c.dispose();
-      }
-      for (final c in _destQtyControllers) {
-        c.dispose();
-      }
-      _destControllers.clear();
-      _destQtyControllers.clear();
-      _noteCtrl.clear();
-      _pricePerVehicleCtrl.clear();
-      _quantityCtrl.text = '1';
-      _durationDaysCtrl.text = '7';
       setState(() {
         _availableFrom = DateTime.now();
-        _availableTo = null;
+        _availableVehicles = 1;
+        _routes.clear();
+        _acceptsOtherDestinations = false;
         _selectedFleetVehicleIds.clear();
         _submitting = false;
       });
     } catch (e) {
       if (!mounted) return;
       setState(() => _submitting = false);
-      ScaffoldMessenger.of(context).showSnackBar(
-        SnackBar(
-          content: Text(e.toString().replaceFirst('Exception: ', '')),
-        ),
-      );
+      showUserErrorSnackBar(context, e, fallback: 'Failed to create listing');
     }
   }
 
@@ -1362,6 +1518,22 @@ class _MarketplacePostTabState extends State<_MarketplacePostTab> {
         child: ListView(
           padding: const EdgeInsets.all(20),
           children: [
+            Text(
+              'Post Availability',
+              style: textTheme.titleLarge?.copyWith(
+                fontWeight: FontWeight.w700,
+              ),
+            ),
+            const SizedBox(height: 4),
+            Text(
+              'List your available vehicles and the routes you serve with your rates.',
+              style: textTheme.bodySmall?.copyWith(
+                color: AppColors.textSecondary,
+              ),
+            ),
+            const SizedBox(height: 20),
+
+            // Vehicle type at the very top.
             SearchableVehicleTypePicker(
               value: _vehicleType,
               onChanged: (value) {
@@ -1371,226 +1543,116 @@ class _MarketplacePostTabState extends State<_MarketplacePostTab> {
                 });
               },
             ),
-            const SizedBox(height: 16),
-            TextFormField(
-              controller: _originCtrl,
-              decoration: const InputDecoration(
-                labelText: 'Origin *',
-                hintText: 'e.g. City, depot, or full address',
-                border: OutlineInputBorder(),
-                prefixIcon: Icon(Icons.location_on_outlined),
+            const SizedBox(height: 20),
+
+            // 1. Basic Details
+            _sectionCard(
+              context,
+              title: '1. Basic Details',
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  Text('Available Vehicles', style: textTheme.labelLarge),
+                  const SizedBox(height: 8),
+                  _availableVehiclesStepper(context),
+                  const SizedBox(height: 16),
+                  TextFormField(
+                    controller: _originCtrl,
+                    decoration: const InputDecoration(
+                      labelText: 'Current Location *',
+                      hintText: 'e.g. City, depot, or full address',
+                      border: OutlineInputBorder(),
+                      prefixIcon: Icon(Icons.my_location_outlined),
+                    ),
+                    textCapitalization: TextCapitalization.sentences,
+                    validator: (v) => (v == null || v.trim().isEmpty)
+                        ? 'Enter your current location'
+                        : null,
+                  ),
+                  const SizedBox(height: 16),
+                  OutlinedButton.icon(
+                    onPressed: _pickFrom,
+                    icon: const Icon(Icons.event, size: 18),
+                    label: Text(
+                      'Available from: ${dateFmt.format(_availableFrom)}',
+                    ),
+                  ),
+                ],
               ),
-              textCapitalization: TextCapitalization.sentences,
-              validator: (v) =>
-                  (v == null || v.trim().isEmpty) ? 'Enter origin' : null,
             ),
-            const SizedBox(height: 16),
-            ...List.generate(_destControllers.length, (i) {
-              return Padding(
-                padding: const EdgeInsets.only(bottom: 12),
-                child: Row(
-                  crossAxisAlignment: CrossAxisAlignment.start,
-                  children: [
-                    Expanded(
-                      child: TextFormField(
-                        controller: _destControllers[i],
-                        decoration: InputDecoration(
-                          labelText: 'Destination ${i + 1}',
-                          hintText: 'Stop or delivery point',
-                          border: const OutlineInputBorder(),
-                          prefixIcon: const Icon(Icons.location_on),
-                        ),
-                        textCapitalization: TextCapitalization.sentences,
-                        onChanged: (_) => setState(() {}),
-                      ),
+            const SizedBox(height: 20),
+
+            // 2. Preferred Routes & Rates
+            Row(
+              children: [
+                Expanded(
+                  child: Text(
+                    '2. Preferred Routes & Rates',
+                    style: textTheme.titleMedium?.copyWith(
+                      fontWeight: FontWeight.w600,
                     ),
-                    const SizedBox(width: 8),
-                    SizedBox(
-                      width: 80,
-                      child: TextFormField(
-                        controller: _destQtyControllers[i],
-                        decoration: const InputDecoration(
-                          labelText: 'Qty',
-                          border: OutlineInputBorder(),
-                          isDense: true,
-                        ),
-                        keyboardType: TextInputType.number,
-                        onChanged: (_) => setState(() {}),
-                      ),
-                    ),
-                    IconButton(
-                      tooltip: 'Remove',
-                      onPressed: () => _removeDestField(i),
-                      icon: const Icon(Icons.remove_circle_outline),
-                    ),
-                  ],
+                  ),
                 ),
-              );
-            }),
-            Align(
-              alignment: Alignment.centerLeft,
-              child: TextButton.icon(
-                onPressed: _destControllers.length >= _kMaxDestinations
-                    ? null
-                    : _addDestField,
-                icon: const Icon(Icons.add),
-                label: const Text('Add destination'),
-              ),
+                TextButton.icon(
+                  onPressed: () => _addOrEditRoute(),
+                  icon: const Icon(Icons.add),
+                  label: const Text('Add Route'),
+                ),
+              ],
             ),
-            if (_destControllers.isNotEmpty)
-              Padding(
-                padding: const EdgeInsets.only(bottom: 8),
+            const SizedBox(height: 8),
+            if (_routes.isEmpty)
+              Container(
+                width: double.infinity,
+                padding: const EdgeInsets.all(16),
+                decoration: BoxDecoration(
+                  border: Border.all(color: AppColors.dividerGrey),
+                  borderRadius: BorderRadius.circular(12),
+                ),
                 child: Text(
-                  'Total vehicle slots (sum of quantities): ${_destinationSlotsTotalPreview()}',
+                  'No routes yet. Tap "Add Route" to set a destination with Export / Import rates.',
                   style: textTheme.bodySmall?.copyWith(
                     color: AppColors.textSecondary,
                   ),
                 ),
+              )
+            else
+              ...List.generate(_routes.length, (i) => _routeCard(context, i)),
+            const SizedBox(height: 12),
+
+            // Negotiable "Any Other Destination" catch-all.
+            _otherDestinationRow(context),
+            const SizedBox(height: 20),
+
+            // Optional fleet vehicles (publishes the listing on the marketplace).
+            _fleetSection(context),
+            const SizedBox(height: 20),
+
+            // Info banner
+            Container(
+              padding: const EdgeInsets.all(14),
+              decoration: BoxDecoration(
+                color: AppColors.primary.withValues(alpha: 0.08),
+                borderRadius: BorderRadius.circular(12),
               ),
-            Consumer<VehicleProvider>(
-              builder: (context, vp, _) {
-                final vehicles = vp.vehicles
-                    .where(
-                      (v) =>
-                          v.status.toLowerCase() == 'active' &&
-                          v.ownerType == 'OWN',
-                    )
-                    .toList();
-                return Column(
-                  crossAxisAlignment: CrossAxisAlignment.start,
-                  children: [
-                    Text(
-                      'Fleet vehicles on this listing (optional)',
-                      style: textTheme.labelLarge,
-                    ),
-                    const SizedBox(height: 6),
-                    Text(
-                      'Tap one or more of your active owned vehicles. Total slots must be at least this count.',
+              child: Row(
+                children: [
+                  const Icon(Icons.info_outline,
+                      size: 20, color: AppColors.primary),
+                  const SizedBox(width: 10),
+                  Expanded(
+                    child: Text(
+                      'Buyers pick a route and direction (Export/Import) when they contact you. Rates left as "Negotiable" are shown as Rate on Request.',
                       style: textTheme.bodySmall?.copyWith(
                         color: AppColors.textSecondary,
                       ),
                     ),
-                    const SizedBox(height: 10),
-                    if (vehicles.isEmpty)
-                      Text(
-                        'No active owned vehicles. Add fleets in Vehicles first.',
-                        style: textTheme.bodySmall?.copyWith(
-                          color: AppColors.textMuted,
-                        ),
-                      )
-                    else
-                      Wrap(
-                        spacing: 8,
-                        runSpacing: 8,
-                        children: vehicles.map((v) {
-                          final sel = _selectedFleetVehicleIds.contains(v.id);
-                          return FilterChip(
-                            label: Text(
-                              '${v.vehicleNumber}${v.trailerType != null ? ' · ${v.trailerType}' : ''}',
-                            ),
-                            selected: sel,
-                            onSelected: (_) {
-                              setState(() {
-                                if (sel) {
-                                  _selectedFleetVehicleIds.remove(v.id);
-                                } else {
-                                  _selectedFleetVehicleIds.add(v.id);
-                                }
-                              });
-                            },
-                          );
-                        }).toList(),
-                      ),
-                  ],
-                );
-              },
-            ),
-            const SizedBox(height: 16),
-            OutlinedButton.icon(
-              onPressed: _pickFrom,
-              icon: const Icon(Icons.event, size: 18),
-              label: Text('Available from: ${dateFmt.format(_availableFrom)}'),
-            ),
-            const SizedBox(height: 16),
-            SwitchListTile(
-              title: const Text('Use specific end date'),
-              subtitle: const Text('Otherwise use duration in days'),
-              value: _useEndDate,
-              onChanged: (v) => setState(() {
-                _useEndDate = v;
-              }),
-            ),
-            if (_useEndDate)
-              OutlinedButton.icon(
-                onPressed: _pickTo,
-                icon: const Icon(Icons.event, size: 18),
-                label: Text(
-                  _availableTo == null
-                      ? 'Select end date *'
-                      : 'Until: ${dateFmt.format(_availableTo!)}',
-                ),
-              )
-            else
-              TextFormField(
-                controller: _durationDaysCtrl,
-                decoration: const InputDecoration(
-                  labelText: 'Duration (days) *',
-                  border: OutlineInputBorder(),
-                ),
-                keyboardType: TextInputType.number,
-              ),
-            const SizedBox(height: 16),
-            if (_destControllers.isEmpty)
-              TextFormField(
-                controller: _quantityCtrl,
-                decoration: const InputDecoration(
-                  labelText: 'Vehicle slots (total)',
-                  helperText: 'Open route — single capacity bucket',
-                  border: OutlineInputBorder(),
-                ),
-                keyboardType: TextInputType.number,
-              )
-            else
-              Padding(
-                padding: const EdgeInsets.only(bottom: 4),
-                child: Text(
-                  'Per-destination Qty is the vehicle quota for that stop. They sum to the listing total.',
-                  style: textTheme.bodySmall?.copyWith(
-                    color: AppColors.textSecondary,
                   ),
-                ),
-              ),
-            const SizedBox(height: 16),
-            TextFormField(
-              controller: _pricePerVehicleCtrl,
-              decoration: const InputDecoration(
-                labelText: 'Asking price per vehicle (₹, optional)',
-                hintText: 'e.g. 45000',
-                border: OutlineInputBorder(),
-                prefixText: '₹ ',
-              ),
-              keyboardType: const TextInputType.numberWithOptions(decimal: true),
-              validator: Validators.validateOptionalListingPriceInr,
-            ),
-            Padding(
-              padding: const EdgeInsets.only(top: 6, left: 12, right: 12),
-              child: Text(
-                'You can still negotiate in chat.',
-                style: textTheme.bodySmall?.copyWith(
-                  color: AppColors.textSecondary,
-                ),
+                ],
               ),
             ),
-            const SizedBox(height: 16),
-            TextFormField(
-              controller: _noteCtrl,
-              decoration: const InputDecoration(
-                labelText: 'Note (optional)',
-                border: OutlineInputBorder(),
-              ),
-              maxLines: 2,
-            ),
-            const SizedBox(height: 24),
+            const SizedBox(height: 20),
+
             FilledButton(
               onPressed: _submitting ? null : _submit,
               style: FilledButton.styleFrom(
@@ -1607,19 +1669,292 @@ class _MarketplacePostTabState extends State<_MarketplacePostTab> {
                         color: Colors.white,
                       ),
                     )
-                  : const Text('Post availability'),
+                  : const Text('Post Availability'),
             ),
-            const SizedBox(height: 24),
-            Text(
-              'Posts must match server rules: vehicle type from the list, origin required, and either end date or duration.',
-              style: textTheme.bodySmall?.copyWith(color: AppColors.textSecondary),
+            const SizedBox(height: 12),
+            Row(
+              mainAxisAlignment: MainAxisAlignment.center,
+              children: [
+                const Icon(Icons.verified_user_outlined,
+                    size: 16, color: AppColors.textMuted),
+                const SizedBox(width: 6),
+                Flexible(
+                  child: Text(
+                    'Only verified transporters will see your post',
+                    style: textTheme.bodySmall?.copyWith(
+                      color: AppColors.textMuted,
+                    ),
+                  ),
+                ),
+              ],
             ),
           ],
         ),
       ),
     );
   }
+
+  Widget _sectionCard(
+    BuildContext context, {
+    required String title,
+    required Widget child,
+  }) {
+    final textTheme = Theme.of(context).textTheme;
+    return Container(
+      width: double.infinity,
+      padding: const EdgeInsets.all(16),
+      decoration: BoxDecoration(
+        border: Border.all(color: AppColors.dividerGrey),
+        borderRadius: BorderRadius.circular(12),
+      ),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Text(
+            title,
+            style: textTheme.titleMedium?.copyWith(
+              fontWeight: FontWeight.w600,
+            ),
+          ),
+          const SizedBox(height: 12),
+          child,
+        ],
+      ),
+    );
+  }
+
+  Widget _availableVehiclesStepper(BuildContext context) {
+    final textTheme = Theme.of(context).textTheme;
+    return Row(
+      children: [
+        IconButton.outlined(
+          onPressed: _availableVehicles > 1
+              ? () => setState(() => _availableVehicles--)
+              : null,
+          icon: const Icon(Icons.remove),
+        ),
+        Padding(
+          padding: const EdgeInsets.symmetric(horizontal: 20),
+          child: Text(
+            '$_availableVehicles',
+            style: textTheme.titleLarge?.copyWith(fontWeight: FontWeight.w700),
+          ),
+        ),
+        IconButton.outlined(
+          onPressed: () => setState(() => _availableVehicles++),
+          icon: const Icon(Icons.add),
+        ),
+        const SizedBox(width: 12),
+        Expanded(
+          child: Text(
+            'vehicles available in this pool',
+            style: textTheme.bodySmall?.copyWith(
+              color: AppColors.textSecondary,
+            ),
+          ),
+        ),
+      ],
+    );
+  }
+
+  Widget _routeCard(BuildContext context, int index) {
+    final textTheme = Theme.of(context).textTheme;
+    final r = _routes[index];
+    return Container(
+      margin: const EdgeInsets.only(bottom: 12),
+      padding: const EdgeInsets.all(14),
+      decoration: BoxDecoration(
+        border: Border.all(color: AppColors.dividerGrey),
+        borderRadius: BorderRadius.circular(12),
+      ),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Row(
+            children: [
+              const Icon(Icons.place_outlined,
+                  size: 18, color: AppColors.primary),
+              const SizedBox(width: 8),
+              Expanded(
+                child: Text(
+                  r.destination,
+                  style: textTheme.titleSmall?.copyWith(
+                    fontWeight: FontWeight.w600,
+                  ),
+                ),
+              ),
+              PopupMenuButton<String>(
+                onSelected: (value) {
+                  if (value == 'edit') {
+                    _addOrEditRoute(index: index);
+                  } else if (value == 'remove') {
+                    _removeRoute(index);
+                  }
+                },
+                itemBuilder: (ctx) => const [
+                  PopupMenuItem(value: 'edit', child: Text('Edit')),
+                  PopupMenuItem(value: 'remove', child: Text('Remove')),
+                ],
+                icon: const Icon(Icons.more_vert),
+              ),
+            ],
+          ),
+          const SizedBox(height: 8),
+          Row(
+            children: [
+              Expanded(
+                child: _rateChip(
+                  context,
+                  label: 'Export',
+                  value: _rateLabel(r.exportRate),
+                ),
+              ),
+              const SizedBox(width: 8),
+              Expanded(
+                child: _rateChip(
+                  context,
+                  label: 'Import',
+                  value: _rateLabel(r.importRate),
+                ),
+              ),
+            ],
+          ),
+        ],
+      ),
+    );
+  }
+
+  Widget _rateChip(
+    BuildContext context, {
+    required String label,
+    required String value,
+  }) {
+    final textTheme = Theme.of(context).textTheme;
+    return Container(
+      padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 10),
+      decoration: BoxDecoration(
+        color: AppColors.offWhite,
+        borderRadius: BorderRadius.circular(10),
+      ),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Text(
+            label,
+            style: textTheme.labelSmall?.copyWith(
+              color: AppColors.textSecondary,
+            ),
+          ),
+          const SizedBox(height: 2),
+          Text(
+            value,
+            style: textTheme.titleSmall?.copyWith(
+              fontWeight: FontWeight.w600,
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+
+  Widget _otherDestinationRow(BuildContext context) {
+    final textTheme = Theme.of(context).textTheme;
+    return Container(
+      decoration: BoxDecoration(
+        border: Border.all(color: AppColors.dividerGrey),
+        borderRadius: BorderRadius.circular(12),
+      ),
+      child: SwitchListTile(
+        contentPadding: const EdgeInsets.symmetric(horizontal: 14),
+        value: _acceptsOtherDestinations,
+        onChanged: (v) => setState(() => _acceptsOtherDestinations = v),
+        title: const Text('Any Other Destination'),
+        subtitle: Text(
+          'Rate on Request — accept inquiries for unlisted routes (Negotiable).',
+          style: textTheme.bodySmall?.copyWith(
+            color: AppColors.textSecondary,
+          ),
+        ),
+      ),
+    );
+  }
+
+  /// A vehicle can be attached when it matches the chosen listing type, or when
+  /// it has no type set (untyped vehicles are assignable to any listing).
+  bool _vehicleMatchesSelectedType(VehicleModel v, String? selectedType) {
+    if (selectedType == null || selectedType.isEmpty) return true;
+    final vt = v.vehicleType?.trim();
+    if (vt == null || vt.isEmpty) return true;
+    return vt == selectedType;
+  }
+
+  Widget _fleetSection(BuildContext context) {
+    final textTheme = Theme.of(context).textTheme;
+    final selectedType = _vehicleType?.trim();
+    return Consumer<VehicleProvider>(
+      builder: (context, vp, _) {
+        final vehicles = vp.vehicles
+            .where(
+              (v) =>
+                  v.status.toLowerCase() == 'active' &&
+                  v.ownerType == 'OWN' &&
+                  _vehicleMatchesSelectedType(v, selectedType),
+            )
+            .toList();
+        return Column(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            Text(
+              'Attach fleet vehicles (optional)',
+              style: textTheme.labelLarge,
+            ),
+            const SizedBox(height: 6),
+            Text(
+              'Attaching an active owned vehicle publishes this listing to the marketplace immediately.',
+              style: textTheme.bodySmall?.copyWith(
+                color: AppColors.textSecondary,
+              ),
+            ),
+            const SizedBox(height: 10),
+            if (vehicles.isEmpty)
+              Text(
+                (selectedType == null || selectedType.isEmpty)
+                    ? 'No active owned vehicles. Add fleets in Vehicles first.'
+                    : 'No active owned "$selectedType" vehicles. Add one in Vehicles or change the vehicle type.',
+                style: textTheme.bodySmall?.copyWith(
+                  color: AppColors.textMuted,
+                ),
+              )
+            else
+              Wrap(
+                spacing: 8,
+                runSpacing: 8,
+                children: vehicles.map((v) {
+                  final sel = _selectedFleetVehicleIds.contains(v.id);
+                  return FilterChip(
+                    label: Text(
+                      '${v.vehicleNumber}${v.trailerType != null ? ' · ${v.trailerType}' : ''}',
+                    ),
+                    selected: sel,
+                    onSelected: (_) {
+                      setState(() {
+                        if (sel) {
+                          _selectedFleetVehicleIds.remove(v.id);
+                        } else {
+                          _selectedFleetVehicleIds.add(v.id);
+                        }
+                      });
+                    },
+                  );
+                }).toList(),
+              ),
+          ],
+        );
+      },
+    );
+  }
 }
+
 
 class _MyListingsTab extends StatefulWidget {
   const _MyListingsTab();
@@ -1655,7 +1990,7 @@ class _MyListingsTabState extends State<_MyListingsTab> {
     } catch (e) {
       if (!mounted) return;
       setState(() {
-        _error = e.toString().replaceFirst('Exception: ', '');
+        _error = ErrorUtils.userMessage(e);
         _loading = false;
       });
     }

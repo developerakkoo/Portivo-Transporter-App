@@ -3,6 +3,7 @@ import '../core/constants/app_copy.dart';
 import '../core/constants/app_constants.dart';
 import '../core/theme/app_colors.dart';
 import '../core/utils/helpers.dart';
+import '../core/utils/trip_operational_locations.dart';
 import '../data/models/trip_model.dart';
 
 /// Accordion trip card: summary in header; locations, date, and optional actions when expanded.
@@ -262,6 +263,16 @@ class TripExpansionCard extends StatelessWidget {
               _buildLiveStatusBadge(),
           ],
         ),
+        if (trip.isQueuedBlocked) ...[
+          const SizedBox(height: 6.0),
+          Text(
+            'Waiting for active trip to complete',
+            style: textTheme.bodySmall?.copyWith(
+              color: AppColors.warning,
+              fontSize: 10.0,
+            ),
+          ),
+        ],
       ],
     );
   }
@@ -280,47 +291,13 @@ class TripExpansionCard extends StatelessWidget {
   List<Widget> _buildExpandedBody() {
     return [
       // ── Route row ──────────────────────────────────────────
-      if (trip.pickupLocation != null || trip.dropLocation != null) ...[
-        Row(
-          crossAxisAlignment: CrossAxisAlignment.start,
-          children: [
-            // Origin block
-            if (trip.pickupLocation != null)
-              Expanded(
-                child: _buildRouteCard(
-                  label: 'Origin',
-                  address: trip.pickupLocation!.address ?? 'Location',
-                  isOrigin: true,
-                ),
-              ),
-
-            // Arrow between blocks
-            if (trip.pickupLocation != null &&
-                trip.dropLocation != null)
-              Padding(
-                padding: const EdgeInsets.only(top: 14.0),
-                child: SizedBox(
-                  width: 20.0,
-                  child: Center(
-                    child: Icon(
-                      Icons.chevron_right,
-                      color: AppColors.textSecondary,
-                      size: 16.0,
-                    ),
-                  ),
-                ),
-              ),
-
-            // Destination block
-            if (trip.dropLocation != null)
-              Expanded(
-                child: _buildRouteCard(
-                  label: 'Destination',
-                  address: trip.dropLocation!.address ?? 'Location',
-                  isOrigin: false,
-                ),
-              ),
-          ],
+      if (TripOperationalLocations.visiblePoints(trip.tripType)
+          .any((p) => TripOperationalLocations.readPoint(trip, p) != null)) ...[
+        ..._buildOperationalRouteCards().map(
+          (card) => Padding(
+            padding: const EdgeInsets.only(bottom: 8.0),
+            child: card,
+          ),
         ),
         const SizedBox(height: 10.0),
       ],
@@ -386,6 +363,24 @@ class TripExpansionCard extends StatelessWidget {
         ),
       ],
     ];
+  }
+
+  List<Widget> _buildOperationalRouteCards() {
+    final points = TripOperationalLocations.visiblePoints(trip.tripType);
+    final cards = <Widget>[];
+    for (var i = 0; i < points.length; i++) {
+      final point = points[i];
+      final location = TripOperationalLocations.readPoint(trip, point);
+      if (location == null) continue;
+      cards.add(
+        _buildRouteCard(
+          label: TripOperationalLocations.labelForPoint(trip.tripType, point),
+          address: location.address ?? 'Location',
+          isOrigin: i == 0,
+        ),
+      );
+    }
+    return cards;
   }
 
   Widget _buildRouteCard({

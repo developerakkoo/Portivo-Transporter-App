@@ -39,7 +39,7 @@ class CustomerProvider with ChangeNotifier {
       final results = await _customerService.getCustomers(q: q);
       _customers = results;
     } catch (e) {
-      _error = ErrorUtils.extractErrorMessage(e);
+      _error = ErrorUtils.userMessage(e);
       if (kDebugMode) {
         print('CustomerProvider: Error loading customers: $_error');
       }
@@ -66,7 +66,7 @@ class CustomerProvider with ChangeNotifier {
       }
       return customer;
     } catch (e) {
-      _error = ErrorUtils.extractErrorMessage(e);
+      _error = ErrorUtils.userMessage(e);
       if (kDebugMode) {
         print('CustomerProvider: Error adding customer: $_error');
       }

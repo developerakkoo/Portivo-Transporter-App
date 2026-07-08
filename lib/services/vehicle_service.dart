@@ -4,10 +4,20 @@ import '../core/config/api_config.dart';
 import '../core/utils/json_parser.dart';
 import '../data/models/vehicle_model.dart';
 import '../data/models/trip_model.dart';
+import '../data/models/fleet_import_result.dart';
+import '../data/models/vehicle_verification_result.dart';
 import 'api_service.dart';
 
 class VehicleService {
   final ApiService _api = ApiService();
+
+  Never _throwApiFailure(dynamic data, {required String fallback}) {
+    if (data is Map) {
+      final message = data['message']?.toString();
+      throw Exception(message ?? fallback);
+    }
+    throw Exception(fallback);
+  }
 
   Future<List<VehicleModel>> getVehicles({
     String? status,
@@ -111,13 +121,53 @@ class VehicleService {
           return VehicleModel.fromJson(data);
         }
       }
-      return null;
+      _throwApiFailure(response.data, fallback: 'Failed to create vehicle');
     } catch (e, stackTrace) {
       if (kDebugMode) {
         print('VehicleService: Error creating vehicle: $e');
         print('Stack: $stackTrace');
       }
       rethrow;
+    }
+  }
+
+  /// Verifies a vehicle registration number via SurePass RC (`POST /vehicles/verify`).
+  ///
+  /// Always returns a result (never rethrows): non-2xx responses throw a
+  /// [DioException], whose body carries the same shape and is parsed so the UI
+  /// can still show a message. A gateway outage surfaces as an unverified
+  /// result rather than breaking the form.
+  Future<VehicleVerificationResult> verifyVehicleNumber(String vehicleNumber) async {
+    try {
+      final response = await _api.post(
+        ApiConfig.vehiclesVerify,
+        data: {'vehicleNumber': vehicleNumber},
+      );
+      final data = response.data;
+      if (data is Map) {
+        return VehicleVerificationResult.fromJson(Map<String, dynamic>.from(data));
+      }
+      return VehicleVerificationResult(success: false, isVerified: false);
+    } on DioException catch (e) {
+      final data = e.response?.data;
+      if (data is Map) {
+        return VehicleVerificationResult.fromJson(Map<String, dynamic>.from(data));
+      }
+      return VehicleVerificationResult(
+        success: false,
+        isVerified: false,
+        message: 'Could not verify vehicle. Please check your connection.',
+      );
+    } catch (e, stackTrace) {
+      if (kDebugMode) {
+        print('VehicleService: Error verifying vehicle: $e');
+        print('Stack: $stackTrace');
+      }
+      return VehicleVerificationResult(
+        success: false,
+        isVerified: false,
+        message: 'Verification failed',
+      );
     }
   }
 
@@ -142,7 +192,7 @@ class VehicleService {
           return VehicleModel.fromJson(data);
         }
       }
-      return null;
+      _throwApiFailure(response.data, fallback: 'Failed to update vehicle');
     } catch (e, stackTrace) {
       if (kDebugMode) {
         print('VehicleService: Error updating vehicle: $e');
@@ -160,7 +210,10 @@ class VehicleService {
       
       final response = await _api.delete(ApiConfig.vehicleById(id));
 
-      return response.data['success'] == true;
+      if (response.data['success'] == true) {
+        return true;
+      }
+      _throwApiFailure(response.data, fallback: 'Failed to delete vehicle');
     } catch (e, stackTrace) {
       if (kDebugMode) {
         print('VehicleService: Error deleting vehicle: $e');
@@ -256,6 +309,38 @@ class VehicleService {
     } catch (e, stackTrace) {
       if (kDebugMode) {
         print('VehicleService: Error uploading document: $e');
+        print('Stack: $stackTrace');
+      }
+      rethrow;
+    }
+  }
+
+  /// Uploads an xlsx/csv spreadsheet to bulk-import fleet (vehicles + drivers).
+  Future<FleetImportResult> bulkImportFleet(String filePath) async {
+    try {
+      if (kDebugMode) {
+        print('VehicleService: Bulk importing fleet from: $filePath');
+      }
+
+      final filename = filePath.split(RegExp(r'[\\/]+')).last;
+      final formData = FormData.fromMap({
+        'file': await MultipartFile.fromFile(filePath, filename: filename),
+      });
+
+      final response = await _api.postMultipart(
+        ApiConfig.vehiclesBulkImport,
+        formData: formData,
+      );
+
+      if (response.data['success'] == true) {
+        return FleetImportResult.fromJson(
+          Map<String, dynamic>.from(response.data as Map),
+        );
+      }
+      _throwApiFailure(response.data, fallback: 'Failed to import fleet');
+    } catch (e, stackTrace) {
+      if (kDebugMode) {
+        print('VehicleService: Error importing fleet: $e');
         print('Stack: $stackTrace');
       }
       rethrow;

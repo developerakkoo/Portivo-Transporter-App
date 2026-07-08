@@ -2,6 +2,7 @@ import 'package:flutter/foundation.dart';
 import '../data/models/notification_model.dart';
 import '../services/notification_service.dart';
 import '../services/socket_service.dart';
+import '../utils/error_utils.dart';
 
 class NotificationProvider with ChangeNotifier {
   final NotificationService _notificationService = NotificationService();
@@ -51,7 +52,7 @@ class NotificationProvider with ChangeNotifier {
       _notifications = response.notifications;
       _unreadCount = response.unreadCount;
     } catch (e) {
-      _error = e.toString();
+      _error = ErrorUtils.userMessage(e);
       if (kDebugMode) {
         print('NotificationProvider: Error loading notifications: $e');
       }

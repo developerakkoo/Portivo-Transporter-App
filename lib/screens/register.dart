@@ -2,6 +2,7 @@ import 'package:flutter/material.dart';
 import 'package:provider/provider.dart';
 import '../core/constants/operating_countries.dart';
 import '../core/theme/app_colors.dart';
+import '../core/utils/user_feedback.dart';
 import '../providers/auth_provider.dart';
 
 enum PasswordStrength { weak, fair, good, strong }
@@ -74,12 +75,7 @@ class _RegisterScreenState extends State<RegisterScreen> {
           setState(() {
             _isLoading = false;
           });
-          ScaffoldMessenger.of(context).showSnackBar(
-            SnackBar(
-              content: Text('Registration failed: ${e.toString().replaceFirst('Exception: ', '')}'),
-              backgroundColor: Colors.red,
-            ),
-          );
+          showUserErrorSnackBar(context, e, fallback: 'Registration failed');
         }
       }
     }

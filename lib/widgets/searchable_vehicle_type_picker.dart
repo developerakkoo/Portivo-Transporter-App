@@ -1,8 +1,10 @@
 import 'package:flutter/material.dart';
 import 'package:provider/provider.dart';
 
+import '../core/notifications/app_banner_controller.dart';
 import '../core/theme/app_colors.dart';
 import '../data/models/vehicle_type_request_model.dart';
+import '../core/utils/user_feedback.dart';
 import '../providers/vehicle_type_provider.dart';
 
 class SearchableVehicleTypePicker extends StatefulWidget {
@@ -53,8 +55,18 @@ class _SearchableVehicleTypePickerState extends State<SearchableVehicleTypePicke
   @override
   void didUpdateWidget(covariant SearchableVehicleTypePicker oldWidget) {
     super.didUpdateWidget(oldWidget);
-    if (widget.value != oldWidget.value && widget.value != _searchController.text) {
-      _searchController.text = widget.value ?? '';
+    if (widget.value != oldWidget.value &&
+        widget.value != _searchController.text) {
+      // Defer so we don't mutate the controller (which notifies the enclosing
+      // Form's TextFormField and calls setState) during the build phase, which
+      // throws "setState() or markNeedsBuild() called during build".
+      WidgetsBinding.instance.addPostFrameCallback((_) {
+        if (!mounted) return;
+        final target = widget.value ?? '';
+        if (_searchController.text != target) {
+          _searchController.text = target;
+        }
+      });
     }
   }
 
@@ -133,21 +145,15 @@ class _SearchableVehicleTypePickerState extends State<SearchableVehicleTypePicke
       _focusNode.unfocus();
       setState(() => _showSuggestions = false);
 
-      ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(
-          content: Text(
-            'Submitted for admin approval. You can use this type on your vehicles while pending.',
-          ),
-        ),
-      );
+      context.read<AppBannerController>().show(
+            id: 'vehicle-type-submitted-$requestedName',
+            title: 'Vehicle type submitted',
+            body: 'Waiting for admin approval',
+            type: AppBannerType.info,
+          );
     } catch (e) {
       if (!mounted) return;
-      ScaffoldMessenger.of(context).showSnackBar(
-        SnackBar(
-          content: Text(e.toString().replaceFirst('Exception: ', '')),
-          backgroundColor: Colors.red,
-        ),
-      );
+      showUserErrorSnackBar(context, e);
     }
   }
 

@@ -9,6 +9,8 @@ import '../data/models/vehicle_model.dart';
 import '../data/models/driver_model.dart';
 import '../providers/trip_provider.dart';
 import '../providers/customer_provider.dart';
+import '../widgets/trip_operational_location_fields.dart';
+import '../core/utils/trip_operational_locations.dart';
 import 'location_picker_screen.dart';
 import '../providers/vehicle_provider.dart';
 import '../providers/driver_provider.dart';
@@ -50,14 +52,11 @@ class _CreateTripScreenState extends State<CreateTripScreen> {
 
   String? _selectedTripType;
   final List<_AssignmentEntry> _assignments = [];
-  final _pickupLocationController = TextEditingController();
-  final _dropLocationController = TextEditingController();
+  late final OperationalLocationDraft _locations;
   final _tripReferenceController = TextEditingController();
   final _customerNameController = TextEditingController();
   final _customerFocusNode = FocusNode();
   final _tripRefFocusNode = FocusNode();
-  TripLocation? _pickupLocation;
-  TripLocation? _dropLocation;
   bool _isLoading = false;
   bool _isSavingDraft = false;
   String? _draftId;
@@ -67,6 +66,7 @@ class _CreateTripScreenState extends State<CreateTripScreen> {
   @override
   void initState() {
     super.initState();
+    _locations = OperationalLocationDraft();
     _draftId = widget.draftId;
     _assignments.add(_AssignmentEntry());
     WidgetsBinding.instance.addPostFrameCallback((_) async {
@@ -94,8 +94,7 @@ class _CreateTripScreenState extends State<CreateTripScreen> {
     for (final e in _assignments) {
       e.dispose();
     }
-    _pickupLocationController.dispose();
-    _dropLocationController.dispose();
+    _locations.dispose();
     _tripReferenceController.dispose();
     _customerNameController.dispose();
     _customerFocusNode.dispose();
@@ -133,10 +132,11 @@ class _CreateTripScreenState extends State<CreateTripScreen> {
     setState(() {
       _draftId = draft.id;
       _selectedTripType = draft.tripType;
-      _pickupLocation = draft.pickupLocation;
-      _dropLocation = draft.dropLocation;
-      _pickupLocationController.text = draft.pickupLocation?.address ?? '';
-      _dropLocationController.text = draft.dropLocation?.address ?? '';
+      _locations.tripType = draft.tripType;
+      _locations.pickup = draft.pickupLocation;
+      _locations.intermediate = draft.intermediateLocation;
+      _locations.drop = draft.dropLocation;
+      _locations.syncControllersFromState();
       _tripReferenceController.text = draft.reference ?? '';
       _customerNameController.text = draft.customerName ?? '';
     });
@@ -265,34 +265,28 @@ class _CreateTripScreenState extends State<CreateTripScreen> {
   }
 
 
-  Future<void> _openLocationPicker(bool isPickup) async {
-    final result = await Navigator.push<TripLocation>(
-      context,
-      MaterialPageRoute(
-        builder: (_) => LocationPickerScreen(
-          isPickup: isPickup,
-          initialQuery: isPickup
-              ? _pickupLocation?.address
-              : _dropLocation?.address,
+  Future<void> _openLocationPicker(OperationalPoint startPoint) async {
+    final points = TripOperationalLocations.visiblePoints(_selectedTripType);
+    final startIndex = points.indexOf(startPoint);
+    if (startIndex < 0) return;
+
+    for (var i = startIndex; i < points.length; i++) {
+      final point = points[i];
+      final current = _locations.locationForPoint(point);
+      final result = await Navigator.push<TripLocation>(
+        context,
+        MaterialPageRoute(
+          builder: (_) => LocationPickerScreen(
+            isPickup: point == OperationalPoint.a,
+            appBarTitle: TripOperationalLocations.pickerTitle(_selectedTripType, point),
+            initialQuery: current?.address,
+          ),
         ),
-      ),
-    );
-    if (result != null && mounted) {
-      setState(() {
-        if (isPickup) {
-          _pickupLocation = result;
-          _pickupLocationController.text = result.address ?? '';
-        } else {
-          _dropLocation = result;
-          _dropLocationController.text = result.address ?? '';
-        }
-      });
-      if (isPickup) {
-        await _openLocationPicker(false);
-      } else {
-        _customerFocusNode.requestFocus();
-      }
+      );
+      if (result == null || !mounted) return;
+      setState(() => _locations.setLocation(point, result));
     }
+    _customerFocusNode.requestFocus();
   }
 
   Map<String, dynamic>? _buildTripPayload() {
@@ -317,8 +311,7 @@ class _CreateTripScreenState extends State<CreateTripScreen> {
           ? _tripReferenceController.text.trim().toUpperCase()
           : null,
       'customerName': _customerNameController.text.trim().toUpperCase(),
-      if (_pickupLocation != null) 'pickupLocation': _pickupLocation!.toJson(),
-      if (_dropLocation != null) 'dropLocation': _dropLocation!.toJson(),
+      ..._locations.buildPayload(),
       'tripType': _selectedTripType!.toUpperCase(),
       if (assignmentsList.isNotEmpty) 'assignments': assignmentsList,
     };
@@ -356,8 +349,7 @@ class _CreateTripScreenState extends State<CreateTripScreen> {
 
   bool get _canCreateTrip {
     return _selectedTripType != null &&
-        _pickupLocation != null &&
-        _dropLocation != null &&
+        _locations.isComplete &&
         _customerNameController.text.trim().isNotEmpty &&
         !_isLoading &&
         !_isSavingDraft;
@@ -412,13 +404,28 @@ class _CreateTripScreenState extends State<CreateTripScreen> {
         if (mounted) {
           if (trip != null) {
             Navigator.of(context).pop();
-            ScaffoldMessenger.of(context).showSnackBar(
-              SnackBar(
-                content: Text(
-                  'Trip created successfully with ${assignmentsList.length} assignment(s)',
+            if (trip.isQueuedBlocked) {
+              ScaffoldMessenger.of(context).showSnackBar(
+                const SnackBar(
+                  content: Text(
+                    'Trip created and queued. It will be ready to start when the current active trip completes.',
+                  ),
+                  backgroundColor: Colors.orange,
                 ),
-                backgroundColor: Colors.green,
-              ),
+              );
+            } else {
+              ScaffoldMessenger.of(context).showSnackBar(
+                SnackBar(
+                  content: Text(
+                    'Trip created successfully with ${assignmentsList.length} assignment(s)',
+                  ),
+                  backgroundColor: Colors.green,
+                ),
+              );
+            }
+            Navigator.of(context).pushNamed(
+              '/trip-detail',
+              arguments: trip.id,
             );
           } else {
             ScaffoldMessenger.of(context).showSnackBar(
@@ -585,12 +592,18 @@ class _CreateTripScreenState extends State<CreateTripScreen> {
                 _buildAssignmentsSection(textTheme),
                 const SizedBox(height: 20.0),
 
-                // Pickup Location
-                _buildPickupLocationField(textTheme),
-                const SizedBox(height: 20.0),
-
-                // Drop Location
-                _buildDropLocationField(textTheme),
+                // Operational locations
+                TripOperationalLocationFields(
+                  tripType: _selectedTripType,
+                  controllers: _locations.controllers,
+                  onPick: _openLocationPicker,
+                  validator: (point) {
+                    if (_locations.locationForPoint(point) == null) {
+                      return '${TripOperationalLocations.labelForPoint(_selectedTripType, point)} is required';
+                    }
+                    return null;
+                  },
+                ),
                 const SizedBox(height: 20.0),
 
                 // Customer Name
@@ -631,6 +644,7 @@ class _CreateTripScreenState extends State<CreateTripScreen> {
       onChanged: (value) {
         setState(() {
           _selectedTripType = value;
+          _locations.onTripTypeChanged(value);
         });
       },
       validator: (value) {
@@ -1083,49 +1097,6 @@ class _CreateTripScreenState extends State<CreateTripScreen> {
       },
     );
   }
-
-  Widget _buildPickupLocationField(TextTheme textTheme) {
-    return InkWell(
-      onTap: () => _openLocationPicker(true),
-      borderRadius: BorderRadius.circular(12.0),
-      child: AbsorbPointer(
-        child: TextFormField(
-          controller: _pickupLocationController,
-          readOnly: true,
-          decoration: const InputDecoration(
-            labelText: 'Pickup Location',
-            hintText: 'Tap to search and select location',
-            prefixIcon: Icon(Icons.location_on_outlined),
-            suffixIcon: Icon(Icons.search),
-          ),
-          validator: (v) =>
-              _pickupLocation == null ? 'Please select pickup location' : null,
-        ),
-      ),
-    );
-  }
-
-  Widget _buildDropLocationField(TextTheme textTheme) {
-    return InkWell(
-      onTap: () => _openLocationPicker(false),
-      borderRadius: BorderRadius.circular(12.0),
-      child: AbsorbPointer(
-        child: TextFormField(
-          controller: _dropLocationController,
-          readOnly: true,
-          decoration: const InputDecoration(
-            labelText: 'Drop Location',
-            hintText: 'Tap to search and select location',
-            prefixIcon: Icon(Icons.location_on),
-            suffixIcon: Icon(Icons.search),
-          ),
-          validator: (v) =>
-              _dropLocation == null ? 'Please select drop location' : null,
-        ),
-      ),
-    );
-  }
-
 
   Widget _buildTripReferenceField(TextTheme textTheme) {
     return TextFormField(

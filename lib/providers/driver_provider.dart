@@ -1,7 +1,8 @@
 import 'package:flutter/foundation.dart';
 import '../data/models/driver_model.dart';
-import '../services/driver_service.dart';
 import '../services/auth_service.dart';
+import '../services/driver_service.dart';
+import '../utils/error_utils.dart';
 
 class DriverProvider with ChangeNotifier {
   final DriverService _driverService = DriverService();
@@ -45,7 +46,7 @@ class DriverProvider with ChangeNotifier {
         _drivers = drivers;
       }
     } catch (e) {
-      _error = e.toString();
+      _error = ErrorUtils.userMessage(e);
       if (kDebugMode) {
         print('DriverProvider: Error loading drivers: $e');
       }
@@ -65,7 +66,7 @@ class DriverProvider with ChangeNotifier {
       _selectedDriver = driver;
       return driver;
     } catch (e) {
-      _error = e.toString();
+      _error = ErrorUtils.userMessage(e);
       if (kDebugMode) {
         print('DriverProvider: Error getting driver: $e');
       }
@@ -106,7 +107,7 @@ class DriverProvider with ChangeNotifier {
       }
       return driver;
     } catch (e) {
-      _error = e.toString();
+      _error = ErrorUtils.userMessage(e);
       if (kDebugMode) {
         print('DriverProvider: Error creating driver: $e');
       }
@@ -144,7 +145,7 @@ class DriverProvider with ChangeNotifier {
       }
       return driver;
     } catch (e) {
-      _error = e.toString();
+      _error = ErrorUtils.userMessage(e);
       if (kDebugMode) {
         print('DriverProvider: Error updating driver: $e');
       }
@@ -171,7 +172,7 @@ class DriverProvider with ChangeNotifier {
       }
       return success;
     } catch (e) {
-      _error = e.toString();
+      _error = ErrorUtils.userMessage(e);
       if (kDebugMode) {
         print('DriverProvider: Error deleting driver: $e');
       }
