@@ -37,4 +37,50 @@ class NavigationStateProvider with ChangeNotifier {
     _pendingOpenTripsSubTabOnly = null;
     notifyListeners();
   }
+
+  bool _pendingOpenPaymentsTab = false;
+  int _openPaymentsTabNonce = 0;
+
+  bool get pendingOpenPaymentsTab => _pendingOpenPaymentsTab;
+  int get openPaymentsTabNonce => _openPaymentsTabNonce;
+
+  void requestOpenPaymentsTab() {
+    _pendingOpenPaymentsTab = true;
+    _openPaymentsTabNonce++;
+    notifyListeners();
+  }
+
+  void clearPendingOpenPaymentsTab() {
+    _pendingOpenPaymentsTab = false;
+    notifyListeners();
+  }
+
+  bool _pendingOpenHomeTab = false;
+  int? _pendingMarketplaceSubTab;
+  int _marketplaceSubTabNonce = 0;
+
+  bool get pendingOpenHomeTab => _pendingOpenHomeTab;
+  int? get pendingMarketplaceSubTab => _pendingMarketplaceSubTab;
+  int get marketplaceSubTabNonce => _marketplaceSubTabNonce;
+
+  void requestOpenHomeTab() {
+    _pendingOpenHomeTab = true;
+    notifyListeners();
+  }
+
+  void clearPendingOpenHomeTab() {
+    _pendingOpenHomeTab = false;
+    notifyListeners();
+  }
+
+  void requestOpenMarketplaceSubTab(int index) {
+    _pendingMarketplaceSubTab = index;
+    _marketplaceSubTabNonce++;
+    notifyListeners();
+  }
+
+  void clearPendingMarketplaceSubTab() {
+    _pendingMarketplaceSubTab = null;
+    notifyListeners();
+  }
 }

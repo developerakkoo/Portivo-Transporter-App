@@ -1,5 +1,6 @@
 import 'package:flutter/foundation.dart';
 import '../data/models/trip_model.dart';
+import '../data/models/trip_group.dart';
 import '../services/trip_service.dart';
 import '../services/socket_service.dart';
 import '../core/constants/app_constants.dart';
@@ -12,6 +13,7 @@ class TripProvider with ChangeNotifier {
 
   List<TripModel> _trips = [];
   List<TripModel> _availableTrips = [];
+  List<TripModel> _marketplaceAwardedTrips = [];
   List<TripModel> _draftTrips = [];
   Map<String, List<TripModel>> _tripsByStatus = {};
   TripModel? _selectedTrip;
@@ -28,6 +30,8 @@ class TripProvider with ChangeNotifier {
 
   List<TripModel> get trips => _trips;
   List<TripModel> get availableTrips => _availableTrips;
+  /// Awarded inquiry/booking trips (PLANNED, viewer is executor) ready to start.
+  List<TripModel> get marketplaceAwardedTrips => _marketplaceAwardedTrips;
   List<TripModel> get draftTrips => _draftTrips;
   List<TripModel> get activeTrips => _tripsByStatus[AppConstants.tripStatusActive] ?? [];
   List<TripModel> get acceptedTrips => _tripsByStatus[AppConstants.tripStatusAccepted] ?? [];
@@ -41,6 +45,62 @@ class TripProvider with ChangeNotifier {
   bool get isLoading => _isLoading;
   bool get isLoadingDrafts => _isLoadingDrafts;
   String? get error => _error;
+
+  // ----- Trip groups (multi-route / multi-vehicle) -----
+
+  String? _selectedGroupId;
+  TripGroup? _selectedGroup;
+  bool _isLoadingGroup = false;
+  String? _groupError;
+
+  bool get isLoadingGroup => _isLoadingGroup;
+  String? get groupError => _groupError;
+
+  /// True when [t] belongs to the group keyed by [groupId] (either it shares the
+  /// tripGroupId, or it is itself the legacy/ungrouped trip whose id == groupId).
+  bool _tripBelongsToGroup(TripModel t, String groupId) {
+    final key = (t.tripGroupId != null && t.tripGroupId!.isNotEmpty)
+        ? t.tripGroupId!
+        : t.id;
+    return key == groupId || t.id == groupId;
+  }
+
+  /// The currently-open trip group, reconstructed live from [_trips] (so socket
+  /// updates flow through), falling back to the last fetched group.
+  TripGroup? get selectedGroup {
+    final gid = _selectedGroupId;
+    if (gid == null) return _selectedGroup;
+    final trips = _trips.where((t) => _tripBelongsToGroup(t, gid)).toList();
+    if (trips.isEmpty) return _selectedGroup;
+    return TripGroup.fromTrips(gid, trips);
+  }
+
+  /// The Active sub-tab, grouped into per-`tripGroupId` groups (ungrouped/legacy
+  /// trips form a group of one keyed by the trip id). Preserves list order.
+  List<TripGroup> get activeTripGroups {
+    final seen = <String>{};
+    final source = <TripModel>[
+      ...activeTrips,
+      ...plannedTrips,
+      ...acceptedTrips,
+      ...bookedTrips,
+    ].where((t) => seen.add(t.id));
+
+    final order = <String>[];
+    final byGroup = <String, List<TripModel>>{};
+    for (final t in source) {
+      final key = (t.tripGroupId != null && t.tripGroupId!.isNotEmpty)
+          ? t.tripGroupId!
+          : t.id;
+      final bucket = byGroup.putIfAbsent(key, () {
+        order.add(key);
+        return <TripModel>[];
+      });
+      bucket.add(t);
+    }
+
+    return [for (final key in order) TripGroup.fromTrips(key, byGroup[key]!)];
+  }
 
   /// Single in-flight bootstrap so [HomeTab] and [TripsTab] do not double-fetch pages.
   Future<void>? _tripsBootstrapFuture;
@@ -59,6 +119,7 @@ class TripProvider with ChangeNotifier {
       await loadTrips(refresh: true);
       await loadTripsByStatus(AppConstants.tripStatusCancelled);
       await loadAvailableTrips(refresh: true);
+      await loadMarketplaceAwardedTrips();
     } finally {
       _tripsBootstrapFuture = null;
     }
@@ -103,11 +164,51 @@ class TripProvider with ChangeNotifier {
   void _onSocketDriverLocationUpdated(Map<String, dynamic> data) {
     final tripId = data['tripId']?.toString();
     if (tripId == null) return;
+
+    var changed = false;
     // A live fix implies the driver is online; refresh the badge.
     if (_driverStatusByTrip[tripId] != 'online') {
       _driverStatusByTrip[tripId] = 'online';
-      notifyListeners();
+      changed = true;
     }
+
+    // Merge the live ETA / distance / movement-stage + last fix into the trip so
+    // grouped cards and vehicle rows reflect realtime progress without each
+    // running a tracking controller.
+    final index = _trips.indexWhere((t) => t.id == tripId);
+    if (index != -1) {
+      final existing = _trips[index];
+      final eta = data['etaSeconds'];
+      final dist = data['distanceRemainingMeters'];
+      final stage = data['movementStage']?.toString();
+      final tracking = TripTracking(
+        etaSeconds: eta is num ? eta.toInt() : existing.tracking?.etaSeconds,
+        distanceRemainingMeters: dist is num
+            ? dist.toDouble()
+            : existing.tracking?.distanceRemainingMeters,
+        movementStage: (stage != null && stage.isNotEmpty)
+            ? stage
+            : existing.tracking?.movementStage,
+        etaUpdatedAt: DateTime.now(),
+      );
+      final lat = data['latitude'];
+      final lng = data['longitude'];
+      final location = (lat is num && lng is num)
+          ? LastDriverLocation(
+              latitude: lat.toDouble(),
+              longitude: lng.toDouble(),
+              updatedAt: DateTime.now(),
+            )
+          : existing.lastDriverLocation;
+      _trips[index] = existing.copyWith(
+        tracking: tracking,
+        lastDriverLocation: location,
+      );
+      _updateTripsByStatus();
+      changed = true;
+    }
+
+    if (changed) notifyListeners();
   }
 
   void _onSocketTripCreated(Map<String, dynamic> data) {
@@ -522,6 +623,23 @@ class TripProvider with ChangeNotifier {
     }
   }
 
+  /// Loads awarded inquiry/booking trips (Ready to Start) for the Marketplace tab.
+  Future<void> loadMarketplaceAwardedTrips() async {
+    try {
+      final trips = await _tripService.getMarketplaceAwardedTrips();
+      _marketplaceAwardedTrips = trips;
+      if (kDebugMode) {
+        print('TripProvider: Loaded ${trips.length} awarded marketplace trips');
+      }
+    } catch (e) {
+      if (kDebugMode) {
+        print('TripProvider: Error loading awarded marketplace trips: $e');
+      }
+    } finally {
+      notifyListeners();
+    }
+  }
+
   Future<bool> acceptTrip(String tripId) async {
     try {
       final trip = await _tripService.acceptCustomerTrip(tripId);
@@ -639,6 +757,76 @@ class TripProvider with ChangeNotifier {
       _isLoading = false;
       notifyListeners();
     }
+  }
+
+  /// Create a multi-route trip (batch). Returns the created trips or null on
+  /// error. Each returned trip is added to the list and joined via socket.
+  Future<List<TripModel>?> createTripBatch(Map<String, dynamic> payload) async {
+    _isLoading = true;
+    _error = null;
+    notifyListeners();
+
+    try {
+      final trips = await _tripService.createTripBatch(payload);
+      for (final trip in trips) {
+        _addTripToList(trip);
+        _socketService.joinTripRoom(trip.id);
+      }
+      return trips;
+    } catch (e) {
+      _error = ErrorUtils.userMessage(e);
+      if (kDebugMode) {
+        print('TripProvider: Error creating trip batch: $_error');
+      }
+      return null;
+    } finally {
+      _isLoading = false;
+      notifyListeners();
+    }
+  }
+
+  /// Load an aggregated trip group for the group-detail screen. Merges the
+  /// group's trips into [_trips] (joining their socket rooms) so realtime
+  /// updates keep [selectedGroup] fresh.
+  Future<TripGroup?> loadTripGroup(String groupId) async {
+    _isLoadingGroup = true;
+    _groupError = null;
+    _selectedGroupId = groupId;
+    notifyListeners();
+
+    try {
+      final group = await _tripService.getTripGroup(groupId);
+      if (group != null) {
+        _selectedGroup = group;
+        _selectedGroupId = group.groupId;
+        for (final trip in group.trips) {
+          final idx = _trips.indexWhere((t) => t.id == trip.id);
+          if (idx != -1) {
+            _trips[idx] = trip;
+          } else {
+            _trips.add(trip);
+          }
+          _socketService.joinTripRoom(trip.id);
+        }
+        _updateTripsByStatus();
+      }
+      return selectedGroup;
+    } catch (e) {
+      _groupError = ErrorUtils.userMessage(e);
+      if (kDebugMode) {
+        print('TripProvider: Error loading trip group: $_groupError');
+      }
+      return null;
+    } finally {
+      _isLoadingGroup = false;
+      notifyListeners();
+    }
+  }
+
+  void clearSelectedGroup() {
+    _selectedGroupId = null;
+    _selectedGroup = null;
+    _groupError = null;
   }
 
   Future<bool> updateTrip(String id, Map<String, dynamic> tripData) async {
@@ -967,10 +1155,16 @@ class TripProvider with ChangeNotifier {
     }
   }
 
-  Future<TripModel?> saveDraft(Map<String, dynamic> draftData, {String? draftId}) async {
-    _isLoading = true;
-    _error = null;
-    notifyListeners();
+  Future<TripModel?> saveDraft(
+    Map<String, dynamic> draftData, {
+    String? draftId,
+    bool silent = false,
+  }) async {
+    if (!silent) {
+      _isLoading = true;
+      _error = null;
+      notifyListeners();
+    }
 
     try {
       final payload = Map<String, dynamic>.from(draftData);
@@ -988,14 +1182,18 @@ class TripProvider with ChangeNotifier {
       }
       return saved;
     } catch (e) {
-      _error = ErrorUtils.userMessage(e);
+      if (!silent) {
+        _error = ErrorUtils.userMessage(e);
+      }
       if (kDebugMode) {
-        print('TripProvider: Error saving draft: $_error');
+        print('TripProvider: Error saving draft: $e');
       }
       return null;
     } finally {
-      _isLoading = false;
-      notifyListeners();
+      if (!silent) {
+        _isLoading = false;
+        notifyListeners();
+      }
     }
   }
 

@@ -14,7 +14,7 @@ class AppCopy {
   static const beginTrip = 'Begin Trip';
   static const tripProgress = 'Trip Progress';
   static const tripRef = 'Trip Ref';
-  static const tripRefOptional = 'Trip Ref (Optional)';
+  static const tripRefOptional = 'Reference No. (Optional)';
   static const awaitingPod = 'Awaiting POD';
   static const uploadProof = 'Upload Proof';
   static const earnings = 'Earnings';

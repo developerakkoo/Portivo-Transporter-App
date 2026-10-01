@@ -2,22 +2,34 @@ import 'package:flutter/material.dart';
 
 import '../../core/theme/app_colors.dart';
 import '../../core/utils/validators.dart';
+import '../../data/models/trip_model.dart';
+import '../location_picker_screen.dart';
 
 /// Editable route row on the Post/Edit Availability forms. A null rate with its
 /// negotiable flag set means "Rate on Request" for that direction.
 class RouteDraft {
   RouteDraft({
     required this.destination,
+    this.destinationLocation,
     this.exportRate,
     this.importRate,
   });
 
   String destination;
+  TripLocation? destinationLocation;
   num? exportRate;
   num? importRate;
 
   bool get exportNegotiable => exportRate == null;
   bool get importNegotiable => importRate == null;
+
+  bool get hasDestinationCoordinates {
+    final loc = destinationLocation;
+    if (loc == null) return false;
+    final lat = loc.coordinates.latitude;
+    final lng = loc.coordinates.longitude;
+    return !(lat == 0 && lng == 0);
+  }
 }
 
 /// Shows the add/edit route bottom sheet. Returns null if dismissed.
@@ -50,12 +62,15 @@ class _RouteRateEditorSheetState extends State<RouteRateEditorSheet> {
   late final TextEditingController _importCtrl;
   late bool _exportNegotiable;
   late bool _importNegotiable;
+  TripLocation? _destinationLocation;
+  String? _destinationError;
 
   @override
   void initState() {
     super.initState();
     final init = widget.initial;
     _destCtrl = TextEditingController(text: init?.destination ?? '');
+    _destinationLocation = init?.destinationLocation;
     _exportNegotiable = init?.exportNegotiable ?? false;
     _importNegotiable = init?.importNegotiable ?? false;
     _exportCtrl = TextEditingController(
@@ -74,10 +89,36 @@ class _RouteRateEditorSheetState extends State<RouteRateEditorSheet> {
     super.dispose();
   }
 
+  Future<void> _pickDestination() async {
+    final result = await Navigator.push<TripLocation>(
+      context,
+      MaterialPageRoute(
+        builder: (_) => LocationPickerScreen(
+          isPickup: false,
+          appBarTitle: 'Destination',
+          initialQuery:
+              _destCtrl.text.trim().isEmpty ? null : _destCtrl.text.trim(),
+        ),
+      ),
+    );
+    if (result == null || !mounted) return;
+    setState(() {
+      _destinationLocation = result;
+      _destCtrl.text = result.address ?? '';
+      _destinationError = null;
+    });
+  }
+
   void _save() {
     if (!_sheetFormKey.currentState!.validate()) return;
     final dest = _destCtrl.text.trim();
     if (dest.isEmpty) return;
+    if (!_destinationLocationHasCoords()) {
+      setState(() {
+        _destinationError = 'Pick destination on map';
+      });
+      return;
+    }
     num? exportRate;
     num? importRate;
     if (!_exportNegotiable) {
@@ -90,10 +131,19 @@ class _RouteRateEditorSheetState extends State<RouteRateEditorSheet> {
       context,
       RouteDraft(
         destination: dest,
+        destinationLocation: _destinationLocation,
         exportRate: exportRate,
         importRate: importRate,
       ),
     );
+  }
+
+  bool _destinationLocationHasCoords() {
+    final loc = _destinationLocation;
+    if (loc == null) return false;
+    final lat = loc.coordinates.latitude;
+    final lng = loc.coordinates.longitude;
+    return !(lat == 0 && lng == 0);
   }
 
   Widget _rateField({
@@ -164,17 +214,36 @@ class _RouteRateEditorSheetState extends State<RouteRateEditorSheet> {
                   ),
             ),
             const SizedBox(height: 16),
-            TextFormField(
-              controller: _destCtrl,
-              decoration: const InputDecoration(
-                labelText: 'Destination *',
-                hintText: 'City or delivery point',
-                border: OutlineInputBorder(),
-                prefixIcon: Icon(Icons.place_outlined),
+            Material(
+              color: Colors.transparent,
+              child: InkWell(
+                onTap: _pickDestination,
+                borderRadius: BorderRadius.circular(4),
+                child: InputDecorator(
+                  decoration: InputDecoration(
+                    labelText: 'Destination *',
+                    hintText: 'Tap to pick on map',
+                    border: const OutlineInputBorder(),
+                    prefixIcon: const Icon(Icons.place_outlined),
+                    suffixIcon: const Icon(Icons.chevron_right),
+                    errorText: _destinationError,
+                    helperText: _destinationLocationHasCoords()
+                        ? '${_destinationLocation!.coordinates.latitude.toStringAsFixed(5)}, '
+                            '${_destinationLocation!.coordinates.longitude.toStringAsFixed(5)}'
+                        : 'Search or drop a pin to set coordinates',
+                  ),
+                  child: Text(
+                    _destCtrl.text.trim().isEmpty
+                        ? 'Tap to pick on map'
+                        : _destCtrl.text.trim(),
+                    style: TextStyle(
+                      color: _destCtrl.text.trim().isEmpty
+                          ? AppColors.textMuted
+                          : AppColors.textPrimary,
+                    ),
+                  ),
+                ),
               ),
-              textCapitalization: TextCapitalization.sentences,
-              validator: (v) =>
-                  (v == null || v.trim().isEmpty) ? 'Enter a destination' : null,
             ),
             const SizedBox(height: 16),
             _rateField(

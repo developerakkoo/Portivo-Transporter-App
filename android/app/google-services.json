@@ -1,0 +1,29 @@
+{
+  "project_info": {
+    "project_number": "1083683562195",
+    "project_id": "porttivo-67fc5",
+    "storage_bucket": "porttivo-67fc5.firebasestorage.app"
+  },
+  "client": [
+    {
+      "client_info": {
+        "mobilesdk_app_id": "1:1083683562195:android:16aad5b49c02df7f6cea26",
+        "android_client_info": {
+          "package_name": "com.techlapse.porttivo_transporter"
+        }
+      },
+      "oauth_client": [],
+      "api_key": [
+        {
+          "current_key": "AIzaSyC9ZnMutU7Me7AuwMwo05rGpYAM7lfzF_o"
+        }
+      ],
+      "services": {
+        "appinvite_service": {
+          "other_platform_oauth_client": []
+        }
+      }
+    }
+  ],
+  "configuration_version": "1"
+}

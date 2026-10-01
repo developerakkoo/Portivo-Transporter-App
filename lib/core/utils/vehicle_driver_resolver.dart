@@ -7,6 +7,10 @@ DriverModel? resolveDriverForVehicle(
   VehicleModel vehicle,
   List<DriverModel> drivers,
 ) {
+  if (vehicle.driver != null &&
+      vehicle.driver!.status == AppConstants.driverStatusActive) {
+    return vehicle.driver;
+  }
   final id = vehicle.driverId;
   if (id == null || id.isEmpty) return null;
 

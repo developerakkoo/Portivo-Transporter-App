@@ -1,9 +1,12 @@
 import 'package:flutter/material.dart';
 import 'package:flutter/foundation.dart';
 import 'package:provider/provider.dart';
+import 'package:firebase_messaging/firebase_messaging.dart';
 import 'package:google_maps_flutter_android/google_maps_flutter_android.dart';
 import 'package:google_maps_flutter_platform_interface/google_maps_flutter_platform_interface.dart';
 import 'core/theme/app_theme.dart';
+import 'core/navigation/app_navigator.dart';
+import 'services/push_service.dart';
 import 'core/config/app_flags.dart';
 import 'services/storage_service.dart';
 import 'providers/auth_provider.dart';
@@ -17,12 +20,19 @@ import 'providers/customer_provider.dart';
 import 'providers/driver_provider.dart';
 import 'providers/fuel_provider.dart';
 import 'providers/wallet_provider.dart';
+import 'providers/beneficiary_provider.dart';
 import 'providers/company_user_provider.dart';
 import 'providers/pinned_trips_provider.dart';
 import 'providers/marketplace_chat_provider.dart';
+import 'providers/marketplace_payment_provider.dart';
+import 'providers/marketplace_payments_list_provider.dart';
+import 'providers/driver_advance_payment_provider.dart';
+import 'providers/transporter_payment_history_provider.dart';
+import 'providers/requirement_provider.dart';
 import 'providers/support_provider.dart';
 import 'screens/splash_screen.dart';
 import 'screens/login.dart';
+import 'screens/otp_verify_screen.dart';
 import 'screens/register.dart';
 import 'screens/pin_setup.dart';
 import 'screens/pin_login.dart';
@@ -31,6 +41,9 @@ import 'screens/create_trip.dart';
 import 'screens/search_vehicle.dart';
 import 'screens/search_customer.dart';
 import 'screens/wallet.dart';
+import 'screens/payments/bank_account_screen.dart';
+import 'screens/payments/driver_advances_screen.dart';
+import 'screens/payments/payments_screen.dart';
 import 'screens/fuel_cards.dart';
 import 'screens/fuel_card_qr.dart';
 import 'screens/drivers/add_driver_screen.dart';
@@ -42,10 +55,19 @@ import 'screens/vehicles/add_edit_vehicle_screen.dart';
 import 'screens/notifications.dart';
 import 'screens/support.dart';
 import 'screens/trip_detail.dart';
+import 'screens/trip_group_detail.dart';
 import 'screens/map_screen.dart';
 import 'screens/marketplace/marketplace_screen.dart';
+import 'screens/marketplace/my_requirements_screen.dart';
+import 'screens/marketplace/incoming_requirements_screen.dart';
+import 'screens/marketplace/requirement_detail_screen.dart';
+import 'screens/marketplace/requirement_details_screen.dart';
+import 'screens/marketplace/quote_chat_screen.dart';
 import 'screens/reports/reports_screen.dart';
 import 'screens/fleet/add_fleet_screen.dart';
+import 'screens/kyc/kyc_screen.dart';
+import 'screens/kyc/kyc_documents_screen.dart';
+import 'screens/tabs/drivers_tab.dart';
 import 'screens/dev/live_tracking_sandbox_screen.dart';
 
 Future<void> main() async {
@@ -180,6 +202,15 @@ Future<void> _runBootstrap() async {
     // Continue anyway - storage might work partially
   }
 
+  // FCM background handler (guarded — no-op until Firebase config is present).
+  try {
+    FirebaseMessaging.onBackgroundMessage(firebaseBackgroundHandler);
+  } catch (e) {
+    if (kDebugMode) {
+      print('FCM background handler registration skipped: $e');
+    }
+  }
+
   runApp(const MyApp());
 }
 
@@ -284,6 +315,16 @@ class MyApp extends StatelessWidget {
         }),
         ChangeNotifierProvider(create: (_) {
           try {
+            return BeneficiaryProvider();
+          } catch (e) {
+            if (kDebugMode) {
+              print('Error creating BeneficiaryProvider: $e');
+            }
+            rethrow;
+          }
+        }),
+        ChangeNotifierProvider(create: (_) {
+          try {
             return CompanyUserProvider();
           } catch (e) {
             if (kDebugMode) {
@@ -324,10 +365,60 @@ class MyApp extends StatelessWidget {
         }),
         ChangeNotifierProvider(create: (_) {
           try {
+            return RequirementProvider();
+          } catch (e) {
+            if (kDebugMode) {
+              print('Error creating RequirementProvider: $e');
+            }
+            rethrow;
+          }
+        }),
+        ChangeNotifierProvider(create: (_) {
+          try {
             return NavigationStateProvider();
           } catch (e) {
             if (kDebugMode) {
               print('Error creating NavigationStateProvider: $e');
+            }
+            rethrow;
+          }
+        }),
+        ChangeNotifierProvider(create: (_) {
+          try {
+            return DriverAdvancePaymentProvider();
+          } catch (e) {
+            if (kDebugMode) {
+              print('Error creating DriverAdvancePaymentProvider: $e');
+            }
+            rethrow;
+          }
+        }),
+        ChangeNotifierProvider(create: (_) {
+          try {
+            return TransporterPaymentHistoryProvider();
+          } catch (e) {
+            if (kDebugMode) {
+              print('Error creating TransporterPaymentHistoryProvider: $e');
+            }
+            rethrow;
+          }
+        }),
+        ChangeNotifierProvider(create: (_) {
+          try {
+            return MarketplacePaymentProvider();
+          } catch (e) {
+            if (kDebugMode) {
+              print('Error creating MarketplacePaymentProvider: $e');
+            }
+            rethrow;
+          }
+        }),
+        ChangeNotifierProvider(create: (_) {
+          try {
+            return MarketplacePaymentsListProvider();
+          } catch (e) {
+            if (kDebugMode) {
+              print('Error creating MarketplacePaymentsListProvider: $e');
             }
             rethrow;
           }
@@ -345,6 +436,7 @@ class MyApp extends StatelessWidget {
       ],
       child: MaterialApp(
         debugShowCheckedModeBanner: false,
+        navigatorKey: appNavigatorKey,
         title: 'Prottivo Transporter',
         theme: AppTheme.lightTheme(),
         initialRoute: AppFlags.trackingSandbox ? '/' : '/splash',
@@ -353,6 +445,13 @@ class MyApp extends StatelessWidget {
             '/': (context) => const LiveTrackingSandboxScreen(),
           '/splash': (context) => const SplashScreen(),
           '/login': (context) => const LoginScreen(),
+          '/otp-verify': (context) {
+            final args = ModalRoute.of(context)?.settings.arguments;
+            if (args is OtpVerifyArgs) {
+              return OtpVerifyScreen(args: args);
+            }
+            return const LoginScreen();
+          },
           '/register': (context) => const RegisterScreen(),
           '/pin-setup': (context) {
             final args = ModalRoute.of(context)?.settings.arguments;
@@ -371,9 +470,13 @@ class MyApp extends StatelessWidget {
           '/search-vehicle': (context) => const SearchVehicleScreen(),
           '/search-customer': (context) => const SearchCustomerScreen(),
           '/wallet': (context) => const WalletScreen(),
+          '/bank-account': (context) => const BankAccountScreen(),
+          '/payments': (context) => const PaymentsScreen(),
+          '/driver-advances': (context) => const DriverAdvancesScreen(),
           '/fuel-cards': (context) => const FuelCardsScreen(),
           '/fuel-card-qr': (context) => const FuelCardQRScreen(),
           '/add-driver': (context) => const AddDriverScreen(),
+          '/drivers': (context) => const DriversTab(),
           '/company-users': (context) => const CompanyUsersScreen(),
           '/add-user': (context) => const AddEditUserScreen(),
           '/profile': (context) => const ProfileScreen(),
@@ -386,10 +489,41 @@ class MyApp extends StatelessWidget {
           '/notifications': (context) => const NotificationsScreen(),
           '/support': (context) => const SupportHubScreen(),
           '/trip-detail': (context) => const TripDetailScreen(),
+          '/trip-group-detail': (context) => const TripGroupDetailScreen(),
           '/map': (context) => const MapScreen(),
           '/marketplace': (context) => const MarketplaceScreen(),
+          '/my-requirements': (context) => const MyRequirementsScreen(),
+          '/incoming-requirements': (context) =>
+              const IncomingRequirementsScreen(),
+          '/requirement-detail': (context) {
+            final args = ModalRoute.of(context)?.settings.arguments;
+            return RequirementDetailScreen(
+              requirementId: args is String ? args : '',
+            );
+          },
+          '/incoming-requirement': (context) {
+            final args = ModalRoute.of(context)?.settings.arguments;
+            return RequirementDetailsScreen(
+              requirementId: args is String ? args : '',
+            );
+          },
+          '/quote-chat': (context) {
+            final args = ModalRoute.of(context)?.settings.arguments;
+            final map = args is Map ? Map<String, dynamic>.from(args) : {};
+            return QuoteChatScreen(
+              quoteId: map['quoteId']?.toString() ?? '',
+              title: map['title']?.toString(),
+              counterpartyTransporterId:
+                  map['counterpartyTransporterId']?.toString(),
+              openCollectPayment: map['openCollectPayment'] == true,
+              collectReferenceType: map['collectReferenceType']?.toString(),
+              collectReferenceId: map['collectReferenceId']?.toString(),
+            );
+          },
           '/reports': (context) => const ReportsScreen(),
           '/add-fleet': (context) => const AddFleetScreen(),
+          '/kyc': (context) => const KycScreen(),
+          '/kyc-documents': (context) => const KycDocumentsScreen(),
         },
       ),
     );

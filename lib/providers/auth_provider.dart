@@ -1,3 +1,4 @@
+import 'dart:async';
 import 'package:flutter/foundation.dart';
 import '../data/models/auth_response_model.dart';
 import '../services/auth_service.dart';
@@ -5,6 +6,7 @@ import '../services/company_user_service.dart';
 import '../services/marketplace_message_cache.dart';
 import '../services/socket_service.dart';
 import '../services/transporter_service.dart';
+import '../services/push_service.dart';
 import '../utils/error_utils.dart';
 
 class AuthProvider with ChangeNotifier {
@@ -78,6 +80,8 @@ class AuthProvider with ChangeNotifier {
       if (kDebugMode) {
         print('AuthProvider: Socket connected, joined transporter room: $transporterId');
       }
+      // Register this device for FCM push (best-effort).
+      unawaited(PushService().initAndRegister());
     } catch (e) {
       if (kDebugMode) {
         print('AuthProvider: Socket.IO connection failed (non-critical): $e');
@@ -102,6 +106,8 @@ class AuthProvider with ChangeNotifier {
         hasAccess: transporter.hasAccess,
         operatingCountry: transporter.operatingCountry,
         company: transporter.company,
+        kycStatus: transporter.kycStatus,
+        isKycCompleted: transporter.isKycCompleted,
       );
       if (kDebugMode) {
         print('AuthProvider: User from transporter profile — ${_user!.id}');
@@ -216,49 +222,86 @@ class AuthProvider with ChangeNotifier {
     }
   }
 
-  Future<bool> loginWithOTP(String mobile) async {
+  Future<SendOtpResponse?> sendLoginOtp(String mobile) async {
+    if (_isLoading) return null;
     _isLoading = true;
     _error = null;
     notifyListeners();
 
     try {
-      if (kDebugMode) {
-        print('AuthProvider: Attempting OTP login for mobile: $mobile');
-      }
-      
       final response = await _authService.sendOTP(mobile, 'transporter');
-      
+      if (response.success) {
+        _isLoading = false;
+        notifyListeners();
+        return response;
+      }
+      _error = response.message;
+      _isLoading = false;
+      notifyListeners();
+      return null;
+    } catch (e) {
+      _error = _extractErrorMessage(e);
+      _isLoading = false;
+      notifyListeners();
+      return null;
+    }
+  }
+
+  Future<bool> verifyLoginOtp({
+    required String mobile,
+    required String otp,
+  }) async {
+    if (_isLoading) return false;
+    _isLoading = true;
+    _error = null;
+    notifyListeners();
+
+    try {
+      final response = await _authService.verifyOTP(
+        mobile: mobile,
+        otp: otp,
+        userType: 'transporter',
+      );
       if (response.success && response.data != null) {
         _user = response.data!.user;
         _isAuthenticated = true;
         _isLoading = false;
-        
-        if (kDebugMode) {
-          print('AuthProvider: Login successful for user: ${_user!.id}');
-        }
-
         await _connectSocketForCurrentUser();
-
         notifyListeners();
         return true;
-      } else {
-        _error = response.message;
-        _isLoading = false;
-        if (kDebugMode) {
-          print('AuthProvider: Login failed: ${response.message}');
-        }
-        notifyListeners();
-        return false;
       }
-    } catch (e, stackTrace) {
-      if (kDebugMode) {
-        print('AuthProvider: Login error: $e');
-        print('Stack: $stackTrace');
-      }
-      
-      // Extract user-friendly error message
-      String errorMessage = _extractErrorMessage(e);
-      _error = errorMessage;
+      _error = response.message;
+      _isLoading = false;
+      notifyListeners();
+      return false;
+    } catch (e) {
+      _error = _extractErrorMessage(e);
+      _isLoading = false;
+      notifyListeners();
+      return false;
+    }
+  }
+
+  Future<bool> resendLoginOtp(
+    String mobile, {
+    String retryType = 'text',
+  }) async {
+    if (_isLoading) return false;
+    _isLoading = true;
+    _error = null;
+    notifyListeners();
+
+    try {
+      await _authService.resendOTP(
+        mobile: mobile,
+        userType: 'transporter',
+        retryType: retryType,
+      );
+      _isLoading = false;
+      notifyListeners();
+      return true;
+    } catch (e) {
+      _error = _extractErrorMessage(e);
       _isLoading = false;
       notifyListeners();
       return false;
@@ -376,6 +419,9 @@ class AuthProvider with ChangeNotifier {
           await MarketplaceMessageCache.instance.clearAllForActor(actorId);
         } catch (_) {}
       }
+      try {
+        await PushService().unregister();
+      } catch (_) {}
       await _authService.logout();
       _socketService.clearJoinedRooms();
       _socketService.disconnect();
@@ -399,6 +445,16 @@ class AuthProvider with ChangeNotifier {
   void clearError() {
     _error = null;
     notifyListeners();
+  }
+
+  Future<void> refreshProfile() async {
+    try {
+      await _reloadUserFromProfile();
+    } catch (e) {
+      if (kDebugMode) {
+        print('AuthProvider: refreshProfile failed: $e');
+      }
+    }
   }
 
   /// Extract user-friendly error message from exception

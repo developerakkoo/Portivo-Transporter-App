@@ -8,6 +8,7 @@ class FleetImportRowResult {
   final String? vehicleId;
   final String? driverId;
   final String? error;
+  final String? rcStatus;
 
   FleetImportRowResult({
     required this.row,
@@ -16,6 +17,7 @@ class FleetImportRowResult {
     this.vehicleId,
     this.driverId,
     this.error,
+    this.rcStatus,
   });
 
   factory FleetImportRowResult.fromJson(Map<String, dynamic> json) {

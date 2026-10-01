@@ -12,6 +12,9 @@ class TransporterModel {
   final double walletBalance;
   final DateTime createdAt;
   final DateTime updatedAt;
+  final String? kycStatus;
+  final bool isKycCompleted;
+  final String? kycMessage;
 
   TransporterModel({
     required this.id,
@@ -25,6 +28,9 @@ class TransporterModel {
     required this.walletBalance,
     required this.createdAt,
     required this.updatedAt,
+    this.kycStatus,
+    this.isKycCompleted = false,
+    this.kycMessage,
   });
 
   factory TransporterModel.fromJson(Map<String, dynamic> json) {
@@ -41,6 +47,9 @@ class TransporterModel {
       walletBalance: JsonParser.extractDouble(json['walletBalance'], 0.0),
       createdAt: JsonParser.extractDateTime(json['createdAt']) ?? DateTime.now(),
       updatedAt: JsonParser.extractDateTime(json['updatedAt']) ?? DateTime.now(),
+      kycStatus: json['kycStatus']?.toString(),
+      isKycCompleted: JsonParser.extractBool(json['isKycCompleted'], false),
+      kycMessage: json['kycMessage']?.toString(),
     );
   }
 

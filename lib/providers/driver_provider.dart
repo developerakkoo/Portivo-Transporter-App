@@ -90,6 +90,9 @@ class DriverProvider with ChangeNotifier {
     required String mobile,
     required String name,
     String? status,
+    String? alternateMobile,
+    String? licenseNumber,
+    String? licenseValidTill,
   }) async {
     _isLoading = true;
     _error = null;
@@ -100,6 +103,9 @@ class DriverProvider with ChangeNotifier {
         mobile: mobile,
         name: name,
         status: status,
+        alternateMobile: alternateMobile,
+        licenseNumber: licenseNumber,
+        licenseValidTill: licenseValidTill,
       );
       if (driver != null) {
         _drivers.add(driver);
@@ -122,6 +128,9 @@ class DriverProvider with ChangeNotifier {
     required String id,
     String? name,
     String? status,
+    String? alternateMobile,
+    String? licenseNumber,
+    String? licenseValidTill,
   }) async {
     _isLoading = true;
     _error = null;
@@ -132,6 +141,9 @@ class DriverProvider with ChangeNotifier {
         id: id,
         name: name,
         status: status,
+        alternateMobile: alternateMobile,
+        licenseNumber: licenseNumber,
+        licenseValidTill: licenseValidTill,
       );
       if (driver != null) {
         final index = _drivers.indexWhere((d) => d.id == id);

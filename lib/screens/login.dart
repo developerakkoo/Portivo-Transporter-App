@@ -3,6 +3,7 @@ import 'package:provider/provider.dart';
 import '../core/theme/app_colors.dart';
 import '../core/utils/validators.dart';
 import '../providers/auth_provider.dart';
+import '../screens/otp_verify_screen.dart';
 import '../utils/error_utils.dart';
 import '../widgets/permission_modal.dart';
 import '../services/device_permission_service.dart';
@@ -77,29 +78,36 @@ class _LoginScreenState extends State<LoginScreen> with WidgetsBindingObserver {
   }
 
   Future<void> _handleSignIn() async {
-    if (_formKey.currentState?.validate() ?? false) {
-      setState(() {
-        _isLoading = true;
-        _errorMessage = null;
-      });
+    if (_isLoading) return;
+    if (!(_formKey.currentState?.validate() ?? false)) return;
 
-      final authProvider = Provider.of<AuthProvider>(context, listen: false);
-      final success = await authProvider.loginWithOTP(_mobileController.text.trim());
+    setState(() {
+      _isLoading = true;
+      _errorMessage = null;
+    });
 
-      if (mounted) {
-        setState(() {
-          _isLoading = false;
-          if (!success) {
-            _errorMessage = ErrorUtils.userMessage(
-              authProvider.error ?? 'Login failed',
-            );
-          }
-        });
+    final authProvider = Provider.of<AuthProvider>(context, listen: false);
+    final mobile = Validators.normalizeIndianMobile(_mobileController.text.trim());
+    final sent = await authProvider.sendLoginOtp(mobile);
 
-        if (success) {
-          Navigator.of(context).pushReplacementNamed('/home');
-        }
+    if (!mounted) return;
+    setState(() {
+      _isLoading = false;
+      if (sent == null) {
+        _errorMessage = ErrorUtils.userMessage(
+          authProvider.error ?? 'Could not send OTP. Please try again.',
+        );
       }
+    });
+
+    if (sent != null) {
+      Navigator.of(context).pushNamed(
+        '/otp-verify',
+        arguments: OtpVerifyArgs(
+          mobile: sent.mobile ?? mobile,
+          requestId: sent.requestId,
+        ),
+      );
     }
   }
 

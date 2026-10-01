@@ -76,7 +76,7 @@ class _LocationField extends StatelessWidget {
         decoration: InputDecoration(
           labelText: label,
           hintText: TripOperationalLocations.fieldHint(OperationalPoint.a),
-          suffixIcon: const Icon(Icons.map_outlined),
+          suffixIcon: const Icon(Icons.search),
         ),
       ),
     );
@@ -128,6 +128,11 @@ class OperationalLocationDraft {
       case OperationalPoint.a:
         pickup = location;
         controllers[OperationalPoint.a]?.text = location.address ?? '';
+        if (TripOperationalLocations.isImportExportTripType(tripType) &&
+            drop == null) {
+          drop = location;
+          controllers[OperationalPoint.c]?.text = location.address ?? '';
+        }
       case OperationalPoint.b:
         if (TripOperationalLocations.isLocalTripType(tripType)) {
           drop = location;
@@ -161,6 +166,10 @@ class OperationalLocationDraft {
       if (drop == null && previousDrop != null) {
         drop = previousDrop;
       }
+    } else if (TripOperationalLocations.isImportExportTripType(newType) &&
+        pickup != null &&
+        drop == null) {
+      drop = pickup;
     }
     syncControllersFromState();
   }

@@ -28,6 +28,7 @@ class SocketService {
   final List<void Function(Map<String, dynamic>)> _supportChatListeners = [];
   final List<void Function(Map<String, dynamic>)> _chatPeerPresenceListeners = [];
   final List<void Function(Map<String, dynamic>)> _marketplaceBookingLifecycleListeners = [];
+  final List<void Function(Map<String, dynamic>)> _marketplacePaymentReadyListeners = [];
   final List<void Function(String message)> _marketplaceChatErrorListeners = [];
 
   final List<void Function()> _reconnectedListeners = [];
@@ -53,6 +54,7 @@ class SocketService {
   final List<void Function(Map<String, dynamic>)> _driverStatusChangedListeners = [];
   final List<void Function(Map<String, dynamic>)> _vehicleTypeRequestUpdatedListeners = [];
   final List<void Function(Map<String, dynamic>)> _vehiclePostListeners = [];
+  final List<void Function(Map<String, dynamic>)> _notificationListeners = [];
 
   /// Marketplace T2T: `userId` is transporter id.
   void Function(String userId)? onUserOnline;
@@ -480,6 +482,14 @@ class SocketService {
       }
     });
 
+    _socket!.on('booking:price-accepted', (data) {
+      if (data is Map) {
+        final m = Map<String, dynamic>.from(data);
+        m['_event'] = 'booking:price-accepted';
+        dispatchMarketplace(m);
+      }
+    });
+
     _socket!.on('booking:requested', (data) {
       if (data is Map) {
         final m = Map<String, dynamic>.from(data);
@@ -585,12 +595,35 @@ class SocketService {
       if (data is Map) dispatchBookingLifecycle('booking:completed', data);
     });
 
+    _socket!.on('marketplace:payment:ready', (data) {
+      if (data is Map) {
+        final m = Map<String, dynamic>.from(data);
+        m['_event'] = 'marketplace:payment:ready';
+        for (final listener in _marketplacePaymentReadyListeners) {
+          listener(m);
+        }
+      }
+    });
+
     _socket!.on('vehicle-type:request:updated', (data) {
       if (kDebugMode) {
         print('SocketService: vehicle-type:request:updated - $data');
       }
       _dispatchPayload(_vehicleTypeRequestUpdatedListeners, data);
     });
+
+    // Generic inbox ping (inquiry/quote/award/counter/quote-chat events).
+    _socket!.on('notification:new', (data) {
+      _dispatchPayload(_notificationListeners, data);
+    });
+  }
+
+  void addNotificationListener(void Function(Map<String, dynamic>) listener) {
+    _notificationListeners.add(listener);
+  }
+
+  void removeNotificationListener(void Function(Map<String, dynamic>) listener) {
+    _notificationListeners.remove(listener);
   }
 
   void addTripCreatedListener(void Function(Map<String, dynamic>) listener) {
@@ -799,6 +832,14 @@ class SocketService {
 
   void removeMarketplaceBookingLifecycleListener(void Function(Map<String, dynamic>) listener) {
     _marketplaceBookingLifecycleListeners.remove(listener);
+  }
+
+  void addMarketplacePaymentReadyListener(void Function(Map<String, dynamic>) listener) {
+    _marketplacePaymentReadyListeners.add(listener);
+  }
+
+  void removeMarketplacePaymentReadyListener(void Function(Map<String, dynamic>) listener) {
+    _marketplacePaymentReadyListeners.remove(listener);
   }
 
   void addVehiclePostListener(void Function(Map<String, dynamic>) listener) {

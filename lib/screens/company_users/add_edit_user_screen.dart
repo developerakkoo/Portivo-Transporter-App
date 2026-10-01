@@ -42,13 +42,15 @@ class _AddEditUserScreenState extends State<AddEditUserScreen> {
   );
 
   CompanyUserModel? _existingUser;
-  String _mode = 'add'; // 'add', 'edit', 'set-pin'
+  String _mode = 'add'; // 'add', 'edit', 'set-pin', 'permissions'
   bool _hasAccess = true;
   Set<String> _selectedPermissions = {};
   PinSetupStep _pinStep = PinSetupStep.enter;
   bool _isLoading = false;
   String? _pinErrorMessage;
   bool _showPinSection = false;
+  final GlobalKey _permissionsSectionKey = GlobalKey();
+  bool _scrolledToPermissions = false;
 
   @override
   void didChangeDependencies() {
@@ -64,9 +66,23 @@ class _AddEditUserScreenState extends State<AddEditUserScreen> {
         _emailController.text = _existingUser!.email ?? '';
         _hasAccess = _existingUser!.hasAccess;
         _selectedPermissions = Set.from(_existingUser!.permissions);
-        _showPinSection = _mode == 'set-pin' || !_existingUser!.hasPinSet();
+        _showPinSection = _mode == 'set-pin' ||
+            (_mode != 'permissions' && !_existingUser!.hasPinSet());
       } else {
         _showPinSection = true;
+      }
+
+      if (_mode == 'permissions' && !_scrolledToPermissions) {
+        _scrolledToPermissions = true;
+        WidgetsBinding.instance.addPostFrameCallback((_) {
+          final sectionContext = _permissionsSectionKey.currentContext;
+          if (sectionContext != null && mounted) {
+            Scrollable.ensureVisible(
+              sectionContext,
+              duration: const Duration(milliseconds: 300),
+            );
+          }
+        });
       }
     }
   }
@@ -372,12 +388,17 @@ class _AddEditUserScreenState extends State<AddEditUserScreen> {
   Widget build(BuildContext context) {
     final theme = Theme.of(context);
     final textTheme = theme.textTheme;
-    final isEditMode = _mode == 'edit' || _mode == 'set-pin';
+    final isEditMode =
+        _mode == 'edit' || _mode == 'set-pin' || _mode == 'permissions';
 
     return Scaffold(
       backgroundColor: AppColors.background,
       appBar: AppBar(
-        title: Text(isEditMode ? 'Edit User' : 'Add User'),
+        title: Text(
+          _mode == 'permissions'
+              ? 'Manage Permissions'
+              : (isEditMode ? 'Edit User' : 'Add User'),
+        ),
       ),
       body: SafeArea(
         child: SingleChildScrollView(
@@ -411,7 +432,10 @@ class _AddEditUserScreenState extends State<AddEditUserScreen> {
                 ],
 
                 // Permissions
-                _buildSectionHeader(textTheme, 'Permissions'),
+                KeyedSubtree(
+                  key: _permissionsSectionKey,
+                  child: _buildSectionHeader(textTheme, 'Permissions'),
+                ),
                 const SizedBox(height: 16.0),
                 _buildPermissionsSection(),
 
@@ -428,7 +452,7 @@ class _AddEditUserScreenState extends State<AddEditUserScreen> {
                 _buildSaveButton(theme),
 
                 // Delete Button (if editing)
-                if (isEditMode && _mode != 'set-pin') ...[
+                if (_mode == 'edit') ...[
                   const SizedBox(height: 16.0),
                   _buildDeleteButton(textTheme),
                 ],
@@ -806,7 +830,11 @@ class _AddEditUserScreenState extends State<AddEditUserScreen> {
                 ),
               )
             : Text(
-                _mode == 'set-pin' ? 'Save PIN' : 'Save User',
+                _mode == 'set-pin'
+                    ? 'Save PIN'
+                    : _mode == 'permissions'
+                        ? 'Save Permissions'
+                        : 'Save User',
                 style: theme.textTheme.labelLarge?.copyWith(
                   color: AppColors.background,
                   fontWeight: FontWeight.w600,

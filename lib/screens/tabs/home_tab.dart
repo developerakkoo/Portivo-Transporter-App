@@ -6,7 +6,7 @@ import '../../core/constants/app_copy.dart';
 import '../../core/theme/app_colors.dart';
 import '../../core/constants/app_constants.dart';
 import '../../core/utils/helpers.dart';
-import '../../core/utils/trip_operational_locations.dart';
+import '../../data/models/trip_group.dart';
 import '../../data/models/trip_model.dart';
 import '../../core/utils/user_feedback.dart';
 import '../../providers/trip_provider.dart';
@@ -22,9 +22,7 @@ import '../../widgets/transporter_home_app_bar_title.dart';
 import '../../widgets/trip_expansion_card.dart';
 import '../../core/utils/create_trip_navigation.dart';
 import '../../services/permission_service.dart';
-import '../../services/payment_service.dart';
-import '../../utils/error_utils.dart';
-import '../payments/payu_checkout_screen.dart';
+import '../kyc/kyc_screen.dart';
 
 class HomeTab extends StatefulWidget {
   const HomeTab({super.key});
@@ -35,6 +33,8 @@ class HomeTab extends StatefulWidget {
 
 class _HomeTabState extends State<HomeTab> {
   int _currentBannerIndex = 0;
+  bool _localKycCompleted = false;
+  bool _kycBannerDismissed = false;
 
   @override
   void initState() {
@@ -56,6 +56,11 @@ class _HomeTabState extends State<HomeTab> {
         await pinnedProvider.reconcileWithTripProvider(tripProvider);
         await vehicleProvider.loadVehicles();
         await driverProvider.loadDrivers();
+        if (!mounted) return;
+        await Provider.of<AuthProvider>(context, listen: false).refreshProfile();
+        _localKycCompleted = await isLocalKycCompleted();
+        _kycBannerDismissed = await isKycBannerDismissed();
+        if (mounted) setState(() {});
       } catch (e) {
         if (kDebugMode) {
           print('HomeTab: Error loading initial data: $e');
@@ -263,6 +268,7 @@ class _HomeTabState extends State<HomeTab> {
                 child: Column(
                   crossAxisAlignment: CrossAxisAlignment.stretch,
                   children: [
+                    _buildKycBanner(context, textTheme),
                     _buildNewTripCard(context, textTheme),
 
                     Padding(
@@ -275,13 +281,6 @@ class _HomeTabState extends State<HomeTab> {
                     Padding(
                       padding: const EdgeInsets.symmetric(horizontal: 24.0),
                       child: _buildFleetOverview(context, textTheme),
-                    ),
-
-                    const SizedBox(height: 24.0),
-
-                    Padding(
-                      padding: const EdgeInsets.symmetric(horizontal: 24.0),
-                      child: _buildQuickActions(context, textTheme),
                     ),
 
                     const SizedBox(height: 24.0),
@@ -641,137 +640,238 @@ class _HomeTabState extends State<HomeTab> {
   }
 
   Widget _buildActiveTripCard(TextTheme textTheme, TripModel trip) {
+    final title = _activeTripTitle(trip);
+    final isMarketplace =
+        trip.isMarketplaceBookingTrip || trip.isMarketplaceInquiryTrip;
+    final origin = trip.pickupLocation?.address?.trim() ?? '';
+    final destination = trip.dropLocation?.address?.trim() ?? '';
+    final vehicle = _firstNonEmpty([
+      trip.vehicleNumber,
+      ...?trip.assignments?.map((a) => a.vehicleNumber),
+    ]);
+    final driver = _firstNonEmpty([
+      trip.driverName,
+      ...?trip.assignments?.map((a) => a.driverName),
+    ]);
+    final movement = movementCategoryForTrip(trip);
+    final statusColor = switch (movement) {
+      VehicleMovementCategory.inTransit => AppColors.success,
+      VehicleMovementCategory.loading => AppColors.warning,
+      VehicleMovementCategory.delivered => AppColors.textSecondary,
+    };
+
     return Column(
       crossAxisAlignment: CrossAxisAlignment.start,
       children: [
-        Text(
-          'Active Trip',
-          style: textTheme.titleLarge?.copyWith(
-            fontWeight: FontWeight.w600,
-            color: AppColors.textPrimary,
-          ),
+        Row(
+          children: [
+            Expanded(
+              child: Text(
+                'Active Trip',
+                style: textTheme.titleLarge?.copyWith(
+                  fontWeight: FontWeight.w600,
+                  color: AppColors.textPrimary,
+                ),
+              ),
+            ),
+            TextButton(
+              onPressed: () => context
+                  .read<NavigationStateProvider>()
+                  .requestOpenTripsSubTab(0),
+              style: TextButton.styleFrom(
+                foregroundColor: AppColors.primary,
+                padding: const EdgeInsets.symmetric(horizontal: 4.0),
+                minimumSize: Size.zero,
+                tapTargetSize: MaterialTapTargetSize.shrinkWrap,
+              ),
+              child: Row(
+                mainAxisSize: MainAxisSize.min,
+                children: [
+                  Text(
+                    'View All',
+                    style: textTheme.titleSmall?.copyWith(
+                      fontWeight: FontWeight.w600,
+                      color: AppColors.primary,
+                    ),
+                  ),
+                  const SizedBox(width: 2.0),
+                  const Icon(Icons.arrow_forward, size: 16.0),
+                ],
+              ),
+            ),
+          ],
         ),
-        const SizedBox(height: 16.0),
+        const SizedBox(height: 12.0),
         Material(
           color: AppColors.background,
-          borderRadius: BorderRadius.circular(16.0),
-          child: InkWell(
+          shape: RoundedRectangleBorder(
             borderRadius: BorderRadius.circular(16.0),
+            side: const BorderSide(color: AppColors.dividerGrey, width: 1.0),
+          ),
+          clipBehavior: Clip.antiAlias,
+          child: InkWell(
             onTap: () => Navigator.of(context).pushNamed(
               '/trip-detail',
               arguments: trip.id,
             ),
-            child: Container(
-              padding: const EdgeInsets.all(20.0),
-              decoration: BoxDecoration(
-                borderRadius: BorderRadius.circular(16.0),
-                border: Border.all(color: AppColors.primary, width: 2.0),
-              ),
+            child: Padding(
+              padding: const EdgeInsets.fromLTRB(16.0, 14.0, 12.0, 14.0),
               child: Column(
                 crossAxisAlignment: CrossAxisAlignment.start,
                 children: [
                   Row(
-                    mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                    crossAxisAlignment: CrossAxisAlignment.center,
                     children: [
                       Expanded(
-                        child: Column(
-                          crossAxisAlignment: CrossAxisAlignment.start,
+                        child: Row(
                           children: [
-                            if (trip.containerNumber != null)
-                              Text(
-                                trip.containerNumber!,
-                                style: textTheme.titleMedium?.copyWith(
-                                  fontWeight: FontWeight.bold,
+                            Flexible(
+                              child: Text(
+                                title,
+                                softWrap: true,
+                                style: textTheme.bodyMedium?.copyWith(
+                                  fontSize: 13.0,
+                                  fontWeight: FontWeight.w700,
                                   color: AppColors.primary,
+                                  height: 1.2,
                                 ),
                               ),
-                            if (trip.tripId.isNotEmpty) ...[
-                              const SizedBox(height: 4.0),
-                              Text(
-                                trip.tripId,
-                                style: textTheme.bodySmall?.copyWith(
-                                  color: AppColors.textSecondary,
+                            ),
+                            if (isMarketplace) ...[
+                              const SizedBox(width: 8.0),
+                              Container(
+                                padding: const EdgeInsets.symmetric(
+                                  horizontal: 8.0,
+                                  vertical: 3.0,
+                                ),
+                                decoration: BoxDecoration(
+                                  color: AppColors.offWhite,
+                                  borderRadius: BorderRadius.circular(8.0),
+                                ),
+                                child: Text(
+                                  'Marketplace',
+                                  style: textTheme.labelSmall?.copyWith(
+                                    fontSize: 10.0,
+                                    color: AppColors.textSecondary,
+                                    fontWeight: FontWeight.w600,
+                                  ),
                                 ),
                               ),
                             ],
                           ],
                         ),
                       ),
+                      const SizedBox(width: 8.0),
                       Container(
                         padding: const EdgeInsets.symmetric(
-                          horizontal: 12.0,
-                          vertical: 6.0,
+                          horizontal: 10.0,
+                          vertical: 5.0,
                         ),
                         decoration: BoxDecoration(
-                          color: AppColors.primary.withOpacity(0.1),
-                          borderRadius: BorderRadius.circular(12.0),
+                          color: statusColor.withValues(alpha: 0.12),
+                          borderRadius: BorderRadius.circular(8.0),
                         ),
                         child: Text(
-                          Helpers.getStatusLabel(trip.status),
+                          movement.label,
                           style: textTheme.labelSmall?.copyWith(
-                            color: AppColors.primary,
+                            fontSize: 10.0,
+                            color: statusColor,
                             fontWeight: FontWeight.w600,
                           ),
                         ),
                       ),
+                    ],
+                  ),
+                  const SizedBox(height: 12.0),
+                  Row(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      const Padding(
+                        padding: EdgeInsets.only(top: 1.0),
+                        child: Icon(
+                          Icons.location_on,
+                          size: 14.0,
+                          color: AppColors.primary,
+                        ),
+                      ),
                       const SizedBox(width: 4.0),
-                      Icon(
+                      Flexible(
+                        child: Text(
+                          origin.isEmpty ? 'Pickup' : origin,
+                          softWrap: true,
+                          style: textTheme.bodySmall?.copyWith(
+                            fontSize: 11.0,
+                            height: 1.25,
+                            color: origin.isEmpty
+                                ? AppColors.textMuted
+                                : AppColors.textPrimary,
+                            fontWeight: FontWeight.w600,
+                          ),
+                        ),
+                      ),
+                      const Padding(
+                        padding: EdgeInsets.symmetric(horizontal: 4.0),
+                        child: Icon(
+                          Icons.arrow_forward,
+                          size: 12.0,
+                          color: AppColors.textMuted,
+                        ),
+                      ),
+                      const Padding(
+                        padding: EdgeInsets.only(top: 1.0),
+                        child: Icon(
+                          Icons.location_on,
+                          size: 14.0,
+                          color: AppColors.textSecondary,
+                        ),
+                      ),
+                      const SizedBox(width: 4.0),
+                      Flexible(
+                        child: Text(
+                          destination.isEmpty ? 'Drop' : destination,
+                          softWrap: true,
+                          style: textTheme.bodySmall?.copyWith(
+                            fontSize: 11.0,
+                            height: 1.25,
+                            color: destination.isEmpty
+                                ? AppColors.textMuted
+                                : AppColors.textPrimary,
+                            fontWeight: FontWeight.w600,
+                          ),
+                        ),
+                      ),
+                      const Icon(
                         Icons.chevron_right,
-                        color: AppColors.primary,
-                        size: 22.0,
+                        size: 18.0,
+                        color: AppColors.textSecondary,
                       ),
                     ],
                   ),
-                  const SizedBox(height: 16.0),
-                  if (TripOperationalLocations.visiblePoints(trip.tripType)
-                      .any((p) => TripOperationalLocations.readPoint(trip, p) != null))
-                    Column(
-                      crossAxisAlignment: CrossAxisAlignment.stretch,
-                      children: [
-                        for (final point in TripOperationalLocations.visiblePoints(trip.tripType))
-                          if (TripOperationalLocations.readPoint(trip, point) != null)
-                            Padding(
-                              padding: const EdgeInsets.only(bottom: 8.0),
-                              child: _buildTripInfoRow(
-                                icon: point == OperationalPoint.a
-                                    ? Icons.location_on_outlined
-                                    : Icons.location_on,
-                                label: TripOperationalLocations.labelForPoint(
-                                  trip.tripType,
-                                  point,
-                                ),
-                                value: TripOperationalLocations.readPoint(trip, point)!
-                                        .address ??
-                                    'Location',
-                                textTheme: textTheme,
-                              ),
-                            ),
-                      ],
-                    ),
-                  const SizedBox(height: 16.0),
-                  Container(
-                    padding: const EdgeInsets.all(12.0),
-                    decoration: BoxDecoration(
-                      color: AppColors.offWhite,
-                      borderRadius: BorderRadius.circular(12.0),
-                    ),
-                    child: Row(
-                      children: [
-                        Icon(
-                          Icons.calendar_today_outlined,
-                          color: AppColors.primary,
-                          size: 20.0,
-                        ),
-                        const SizedBox(width: 8.0),
-                        Text(
-                          'Created: ${Helpers.formatDateTime(trip.createdAt)}',
-                          style: textTheme.bodyMedium?.copyWith(
-                            color: AppColors.textPrimary,
-                            fontWeight: FontWeight.w500,
-                          ),
-                        ),
-                      ],
-                    ),
+                  const Padding(
+                    padding: EdgeInsets.symmetric(vertical: 12.0),
+                    child: Divider(height: 1.0, color: AppColors.dividerGrey),
+                  ),
+                  Row(
+                    children: [
+                      _activeTripMeta(
+                        textTheme,
+                        icon: Icons.local_shipping_outlined,
+                        value: vehicle ?? '—',
+                      ),
+                      _activeTripDivider(),
+                      _activeTripMeta(
+                        textTheme,
+                        icon: Icons.person_outline,
+                        value: driver ?? '—',
+                      ),
+                      _activeTripDivider(),
+                      _activeTripMeta(
+                        textTheme,
+                        icon: Icons.schedule_outlined,
+                        value: _activeTripEta(trip),
+                        caption: 'ETA',
+                      ),
+                    ],
                   ),
                 ],
               ),
@@ -782,39 +882,83 @@ class _HomeTabState extends State<HomeTab> {
     );
   }
 
-  Widget _buildTripInfoRow({
+  Widget _activeTripMeta(
+    TextTheme textTheme, {
     required IconData icon,
-    required String label,
     required String value,
-    required TextTheme textTheme,
+    String? caption,
   }) {
-    return Row(
-      children: [
-        Icon(icon, size: 18.0, color: AppColors.textSecondary),
-        const SizedBox(width: 8.0),
-        Expanded(
-          child: Column(
-            crossAxisAlignment: CrossAxisAlignment.start,
-            children: [
-              Text(
-                label,
-                style: textTheme.bodySmall?.copyWith(
-                  color: AppColors.textSecondary,
-                ),
-              ),
-              const SizedBox(height: 2.0),
-              Text(
-                value,
-                style: textTheme.bodyMedium?.copyWith(
-                  color: AppColors.textPrimary,
-                  fontWeight: FontWeight.w500,
-                ),
-              ),
-            ],
-          ),
-        ),
-      ],
+    final valueStyle = textTheme.bodySmall?.copyWith(
+      fontSize: 10.5,
+      color: AppColors.textPrimary,
+      fontWeight: FontWeight.w600,
+      height: 1.2,
     );
+    return Expanded(
+      child: Row(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Padding(
+            padding: const EdgeInsets.only(top: 1.0),
+            child: Icon(icon, size: 14.0, color: AppColors.textSecondary),
+          ),
+          const SizedBox(width: 4.0),
+          Expanded(
+            child: caption == null
+                ? Text(value, softWrap: true, style: valueStyle)
+                : Column(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    mainAxisSize: MainAxisSize.min,
+                    children: [
+                      Text(
+                        caption,
+                        softWrap: true,
+                        style: textTheme.labelSmall?.copyWith(
+                          color: AppColors.textSecondary,
+                          fontSize: 9.0,
+                          height: 1.1,
+                        ),
+                      ),
+                      Text(value, softWrap: true, style: valueStyle),
+                    ],
+                  ),
+          ),
+        ],
+      ),
+    );
+  }
+
+  Widget _activeTripDivider() {
+    return Container(
+      width: 1.0,
+      height: 28.0,
+      margin: const EdgeInsets.symmetric(horizontal: 6.0),
+      color: AppColors.dividerGrey,
+    );
+  }
+
+  String _activeTripTitle(TripModel trip) {
+    final customer = trip.customerName?.trim() ?? '';
+    if (customer.isNotEmpty) return customer;
+    final container = trip.containerNumber?.trim() ?? '';
+    if (container.isNotEmpty) return container;
+    if (trip.tripId.isNotEmpty) return trip.tripId;
+    return 'Trip';
+  }
+
+  String? _firstNonEmpty(Iterable<String?> values) {
+    for (final value in values) {
+      final trimmed = value?.trim() ?? '';
+      if (trimmed.isNotEmpty) return trimmed;
+    }
+    return null;
+  }
+
+  String _activeTripEta(TripModel trip) {
+    final seconds = trip.tracking?.etaSeconds;
+    if (seconds == null || seconds <= 0) return '—';
+    final arrival = DateTime.now().add(Duration(seconds: seconds));
+    return Helpers.formatDate(arrival);
   }
 
   Future<void> _startCreateTripFlow(BuildContext context) async {
@@ -826,6 +970,69 @@ class _HomeTabState extends State<HomeTab> {
     await tripProvider.loadTrips(refresh: true);
     await tripProvider.loadAvailableTrips(refresh: true);
     await pinnedProvider.reconcileWithTripProvider(tripProvider);
+  }
+
+  Widget _buildKycBanner(BuildContext context, TextTheme textTheme) {
+    final user = context.watch<AuthProvider>().user;
+    final apiVerified = user?.isKycVerified == true;
+    if (apiVerified || _localKycCompleted || _kycBannerDismissed) {
+      return const SizedBox.shrink();
+    }
+    return Padding(
+      padding: const EdgeInsets.fromLTRB(24.0, 8.0, 24.0, 8.0),
+      child: Material(
+        color: AppColors.warning.withValues(alpha: 0.12),
+        borderRadius: BorderRadius.circular(12),
+        clipBehavior: Clip.antiAlias,
+        child: Stack(
+          children: [
+            InkWell(
+              onTap: () async {
+                final done = await Navigator.of(context).pushNamed('/kyc');
+                if (!mounted || done != true) return;
+                await context.read<AuthProvider>().refreshProfile();
+                _localKycCompleted = await isLocalKycCompleted();
+                if (mounted) setState(() {});
+              },
+              child: Padding(
+                padding: const EdgeInsets.fromLTRB(14, 14, 40, 14),
+                child: Row(
+                  children: [
+                    const Icon(Icons.verified_user_outlined, color: AppColors.warning),
+                    const SizedBox(width: 12),
+                    Expanded(
+                      child: Text(
+                        'Complete KYC to keep your transporter account verified.',
+                        style: textTheme.bodyMedium?.copyWith(
+                          fontWeight: FontWeight.w600,
+                        ),
+                      ),
+                    ),
+                    const Icon(Icons.arrow_forward, size: 18),
+                  ],
+                ),
+              ),
+            ),
+            Positioned(
+              top: 0,
+              right: 0,
+              child: IconButton(
+                tooltip: 'Dismiss',
+                visualDensity: VisualDensity.compact,
+                padding: const EdgeInsets.all(6),
+                constraints: const BoxConstraints(minWidth: 32, minHeight: 32),
+                icon: const Icon(Icons.close, size: 18),
+                onPressed: () async {
+                  await dismissKycBanner();
+                  if (!mounted) return;
+                  setState(() => _kycBannerDismissed = true);
+                },
+              ),
+            ),
+          ],
+        ),
+      ),
+    );
   }
 
   Widget _buildNewTripCard(BuildContext context, TextTheme textTheme) {
@@ -908,51 +1115,95 @@ class _HomeTabState extends State<HomeTab> {
   }
 
   Widget _buildFleetOverview(BuildContext context, TextTheme textTheme) {
+    void openFleet() => Navigator.of(context).pushNamed('/vehicles');
+
     return Column(
       crossAxisAlignment: CrossAxisAlignment.start,
       children: [
-        Text(
-          'Fleet Overview',
-          style: textTheme.titleLarge?.copyWith(
-            fontWeight: FontWeight.w600,
-            color: AppColors.textPrimary,
-          ),
+        Row(
+          children: [
+            Expanded(
+              child: Text(
+                'Fleet',
+                style: textTheme.titleLarge?.copyWith(
+                  fontWeight: FontWeight.w600,
+                  color: AppColors.textPrimary,
+                ),
+              ),
+            ),
+            TextButton(
+              onPressed: openFleet,
+              style: TextButton.styleFrom(
+                foregroundColor: AppColors.primary,
+                padding: const EdgeInsets.symmetric(horizontal: 4.0),
+                minimumSize: Size.zero,
+                tapTargetSize: MaterialTapTargetSize.shrinkWrap,
+              ),
+              child: Row(
+                mainAxisSize: MainAxisSize.min,
+                children: [
+                  Text(
+                    'View All',
+                    style: textTheme.titleSmall?.copyWith(
+                      fontWeight: FontWeight.w600,
+                      color: AppColors.primary,
+                    ),
+                  ),
+                  const SizedBox(width: 2.0),
+                  const Icon(Icons.arrow_forward, size: 16.0),
+                ],
+              ),
+            ),
+          ],
         ),
-        const SizedBox(height: 16.0),
+        const SizedBox(height: 12.0),
         Consumer2<VehicleProvider, DriverProvider>(
           builder: (context, vehicleProvider, driverProvider, _) {
-            return IntrinsicHeight(
-              child: Row(
-                crossAxisAlignment: CrossAxisAlignment.stretch,
-                children: [
-                  Expanded(
-                    child: _buildFleetCard(
-                      icon: Icons.local_shipping_outlined,
-                      label: 'Vehicles',
-                      value: vehicleProvider.vehicles.length.toString(),
-                      textTheme: textTheme,
-                    ),
+            return Material(
+              color: AppColors.offWhite,
+              shape: RoundedRectangleBorder(
+                borderRadius: BorderRadius.circular(14.0),
+                side: const BorderSide(color: AppColors.dividerGrey, width: 1.0),
+              ),
+              clipBehavior: Clip.antiAlias,
+              child: InkWell(
+                onTap: openFleet,
+                child: Padding(
+                  padding: const EdgeInsets.symmetric(
+                    horizontal: 12.0,
+                    vertical: 10.0,
                   ),
-                  const SizedBox(width: 12.0),
-                  Expanded(
-                    child: _buildFleetCard(
-                      icon: Icons.people_outline,
-                      label: 'Drivers',
-                      value: driverProvider.drivers.length.toString(),
-                      textTheme: textTheme,
-                    ),
+                  child: Row(
+                    children: [
+                      Expanded(
+                        child: _fleetStat(
+                          textTheme,
+                          icon: Icons.local_shipping_outlined,
+                          value: vehicleProvider.vehicles.length.toString(),
+                          label: 'Vehicles',
+                        ),
+                      ),
+                      Container(
+                        width: 1.0,
+                        height: 28.0,
+                        color: AppColors.dividerGrey,
+                      ),
+                      Expanded(
+                        child: _fleetStat(
+                          textTheme,
+                          icon: Icons.people_outline,
+                          value: driverProvider.drivers.length.toString(),
+                          label: 'Drivers',
+                        ),
+                      ),
+                      const Icon(
+                        Icons.chevron_right,
+                        size: 20.0,
+                        color: AppColors.textSecondary,
+                      ),
+                    ],
                   ),
-                  const SizedBox(width: 12.0),
-                  Expanded(
-                    child: _buildFleetCard(
-                      icon: Icons.bar_chart,
-                      label: 'Reports',
-                      showArrow: true,
-                      textTheme: textTheme,
-                      onTap: () => Navigator.of(context).pushNamed('/reports'),
-                    ),
-                  ),
-                ],
+                ),
               ),
             );
           },
@@ -961,243 +1212,44 @@ class _HomeTabState extends State<HomeTab> {
     );
   }
 
-  Widget _buildFleetCard({
+  Widget _fleetStat(
+    TextTheme textTheme, {
     required IconData icon,
+    required String value,
     required String label,
-    required TextTheme textTheme,
-    String? value,
-    bool showArrow = false,
-    VoidCallback? onTap,
   }) {
-    final child = Padding(
-      padding: const EdgeInsets.symmetric(horizontal: 8.0, vertical: 16.0),
-      child: Column(
-        mainAxisSize: MainAxisSize.min,
-        crossAxisAlignment: CrossAxisAlignment.center,
+    return Padding(
+      padding: const EdgeInsets.symmetric(horizontal: 8.0),
+      child: Row(
         children: [
-          Icon(icon, size: 26.0, color: AppColors.primary),
-          const SizedBox(height: 10.0),
-          if (showArrow)
-            const Icon(Icons.arrow_forward, size: 22.0, color: AppColors.primary)
-          else
-            Text(
-              value ?? '0',
-              style: textTheme.titleLarge?.copyWith(
-                fontWeight: FontWeight.bold,
-                color: AppColors.primary,
+          Icon(icon, size: 22.0, color: AppColors.primary),
+          const SizedBox(width: 16.0),
+          Column(
+            crossAxisAlignment: CrossAxisAlignment.center,
+            mainAxisAlignment: MainAxisAlignment.spaceBetween,
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              Text(
+                value,
+                style: textTheme.titleMedium?.copyWith(
+                  fontWeight: FontWeight.w700,
+                  color: AppColors.textPrimary,
+                  height: 1.1,
+                ),
               ),
-            ),
-          const SizedBox(height: 4.0),
-          Text(
-            label,
-            textAlign: TextAlign.center,
-            maxLines: 1,
-            overflow: TextOverflow.ellipsis,
-            style: textTheme.bodySmall?.copyWith(
-              color: AppColors.textSecondary,
-            ),
+              Text(
+                label,
+                style: textTheme.bodySmall?.copyWith(
+                  fontSize: 11.0,
+                  color: AppColors.textSecondary,
+                  height: 1.1,
+                ),
+              ),
+            ],
           ),
         ],
       ),
     );
-
-    return Semantics(
-      button: onTap != null,
-      label: label,
-      child: Material(
-        color: AppColors.offWhite,
-        shape: RoundedRectangleBorder(
-          borderRadius: BorderRadius.circular(14.0),
-          side: const BorderSide(color: AppColors.dividerGrey, width: 1.0),
-        ),
-        clipBehavior: Clip.antiAlias,
-        child: InkWell(
-          onTap: onTap,
-          borderRadius: BorderRadius.circular(14.0),
-          child: child,
-        ),
-      ),
-    );
   }
 
-  Widget _buildQuickActions(BuildContext context, TextTheme textTheme) {
-    return Column(
-      crossAxisAlignment: CrossAxisAlignment.start,
-      children: [
-        Text(
-          'Quick Actions',
-          style: textTheme.titleLarge?.copyWith(
-            fontWeight: FontWeight.w600,
-            color: AppColors.textPrimary,
-          ),
-        ),
-        const SizedBox(height: 16.0),
-        _buildQuickActionCard(
-          icon: Icons.add_business_outlined,
-          title: 'Add Fleet',
-          subtitle: 'Add vehicles and drivers',
-          textTheme: textTheme,
-          onTap: () => Navigator.of(context).pushNamed('/add-fleet'),
-        ),
-        const SizedBox(height: 12.0),
-        _buildQuickActionCard(
-          icon: Icons.pending_actions,
-          title: 'POD Pending',
-          subtitle: 'Trips pending POD upload',
-          textTheme: textTheme,
-          onTap: () {
-            context.read<NavigationStateProvider>().requestOpenTripsSubTab(1);
-          },
-        ),
-        const SizedBox(height: 12.0),
-        _buildQuickActionCard(
-          icon: Icons.drafts_outlined,
-          title: 'Draft Trips',
-          subtitle: 'View saved drafts and continue',
-          textTheme: textTheme,
-          onTap: () => openCreateTripFlow(context),
-        ),
-        const SizedBox(height: 12.0),
-        _buildQuickActionCard(
-          icon: Icons.payment,
-          title: 'PayU Payment Check',
-          subtitle: 'Test the payment integration',
-          textTheme: textTheme,
-          onTap: () => _startPayUCheck(context),
-        ),
-      ],
-    );
-  }
-
-  Future<void> _startPayUCheck(BuildContext context) async {
-    final navigator = Navigator.of(context);
-    final rootNavigator = Navigator.of(context, rootNavigator: true);
-    final messenger = ScaffoldMessenger.of(context);
-    final paymentService = PaymentService();
-    final user = context.read<AuthProvider>().user;
-
-    // Blocking loader while the session is created.
-    showDialog<void>(
-      context: context,
-      barrierDismissible: false,
-      builder: (_) => const Center(
-        child: CircularProgressIndicator(color: AppColors.primary),
-      ),
-    );
-
-    final body = <String, dynamic>{
-      'provider': 'PAYU',
-      'amount': 1250,
-      'currency': 'INR',
-      'purpose': 'Invoice payment',
-      'referenceType': 'INVOICE',
-      // Unique reference each tap so a fresh PENDING session is always created.
-      'referenceId': 'TEST-${DateTime.now().millisecondsSinceEpoch}',
-      'payer': {
-        'name': (user?.name?.trim().isNotEmpty ?? false)
-            ? user!.name
-            : 'Alpha Logistics',
-        'email': 'alpha@example.com',
-        'mobile': (user?.mobile.trim().isNotEmpty ?? false)
-            ? user!.mobile
-            : '9999999999',
-      },
-      // Point surl/furl at the reachable deployed webhook so completion is
-      // detectable regardless of server env configuration.
-      'successUrl': PaymentService.payuWebhookUrl,
-      'failureUrl': PaymentService.payuWebhookUrl,
-    };
-
-    try {
-      final session = await paymentService.createSession(body);
-      rootNavigator.pop(); // dismiss loader
-      if (!mounted) return;
-      await navigator.push(
-        MaterialPageRoute(
-          builder: (_) => PayUCheckoutScreen(session: session),
-        ),
-      );
-    } catch (e) {
-      rootNavigator.pop(); // dismiss loader
-      if (!mounted) return;
-      messenger.showSnackBar(
-        SnackBar(
-          content: Text(
-            ErrorUtils.userMessage(e, fallback: 'Could not start the payment.'),
-          ),
-          backgroundColor: AppColors.error,
-        ),
-      );
-    }
-  }
-
-  Widget _buildQuickActionCard({
-    required IconData icon,
-    required String title,
-    required String subtitle,
-    required TextTheme textTheme,
-    required VoidCallback onTap,
-  }) {
-    return Material(
-      color: AppColors.offWhite,
-      shape: RoundedRectangleBorder(
-        borderRadius: BorderRadius.circular(16.0),
-        side: const BorderSide(color: AppColors.dividerGrey, width: 1.0),
-      ),
-      clipBehavior: Clip.antiAlias,
-      child: InkWell(
-        onTap: onTap,
-        borderRadius: BorderRadius.circular(16.0),
-        child: Padding(
-          padding: const EdgeInsets.all(16.0),
-          child: Row(
-            children: [
-              Container(
-                width: 48.0,
-                height: 48.0,
-                decoration: const BoxDecoration(
-                  color: AppColors.primary,
-                  shape: BoxShape.circle,
-                ),
-                child: Icon(
-                  icon,
-                  color: AppColors.background,
-                  size: 24.0,
-                ),
-              ),
-              const SizedBox(width: 16.0),
-              Expanded(
-                child: Column(
-                  crossAxisAlignment: CrossAxisAlignment.start,
-                  mainAxisSize: MainAxisSize.min,
-                  children: [
-                    Text(
-                      title,
-                      style: textTheme.titleMedium?.copyWith(
-                        fontWeight: FontWeight.w600,
-                        color: AppColors.textPrimary,
-                      ),
-                    ),
-                    const SizedBox(height: 4.0),
-                    Text(
-                      subtitle,
-                      style: textTheme.bodySmall?.copyWith(
-                        color: AppColors.textSecondary,
-                      ),
-                    ),
-                  ],
-                ),
-              ),
-              const SizedBox(width: 12.0),
-              const Icon(
-                Icons.arrow_forward,
-                color: AppColors.primary,
-                size: 22.0,
-              ),
-            ],
-          ),
-        ),
-      ),
-    );
-  }
 }

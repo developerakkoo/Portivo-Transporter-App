@@ -5,6 +5,7 @@ import 'package:flutter_contacts/flutter_contacts.dart';
 import '../../core/constants/app_copy.dart';
 import '../../core/theme/app_colors.dart';
 import '../../core/utils/user_feedback.dart';
+import '../../core/utils/validators.dart';
 import '../../providers/driver_provider.dart';
 
 class AddDriverScreen extends StatefulWidget {
@@ -18,6 +19,9 @@ class _AddDriverScreenState extends State<AddDriverScreen> {
   final _formKey = GlobalKey<FormState>();
   final _nameController = TextEditingController();
   final _phoneController = TextEditingController();
+  final _alternateMobileController = TextEditingController();
+  final _licenseNumberController = TextEditingController();
+  DateTime? _licenseValidTill;
   
   String _selectedStatus = 'pending';
   bool _isLoading = false;
@@ -26,6 +30,8 @@ class _AddDriverScreenState extends State<AddDriverScreen> {
   void dispose() {
     _nameController.dispose();
     _phoneController.dispose();
+    _alternateMobileController.dispose();
+    _licenseNumberController.dispose();
     super.dispose();
   }
 
@@ -76,6 +82,17 @@ class _AddDriverScreenState extends State<AddDriverScreen> {
           mobile: _phoneController.text.trim(),
           name: _nameController.text.trim(),
           status: _selectedStatus,
+          alternateMobile: _alternateMobileController.text.trim().isEmpty
+              ? null
+              : _alternateMobileController.text.trim(),
+          licenseNumber: _licenseNumberController.text.trim().isEmpty
+              ? null
+              : _licenseNumberController.text.trim(),
+          licenseValidTill: _licenseValidTill == null
+              ? null
+              : '${_licenseValidTill!.year.toString().padLeft(4, '0')}-'
+                  '${_licenseValidTill!.month.toString().padLeft(2, '0')}-'
+                  '${_licenseValidTill!.day.toString().padLeft(2, '0')}',
         );
 
         if (mounted) {
@@ -173,6 +190,62 @@ class _AddDriverScreenState extends State<AddDriverScreen> {
                     }
                     return null;
                   },
+                ),
+                const SizedBox(height: 20.0),
+
+                TextFormField(
+                  controller: _alternateMobileController,
+                  keyboardType: TextInputType.phone,
+                  inputFormatters: [FilteringTextInputFormatter.digitsOnly],
+                  decoration: const InputDecoration(
+                    labelText: 'Alternate Mobile',
+                    hintText: 'Optional',
+                  ),
+                  validator: Validators.validateOptionalMobile,
+                ),
+                const SizedBox(height: 20.0),
+
+                TextFormField(
+                  controller: _licenseNumberController,
+                  textCapitalization: TextCapitalization.characters,
+                  decoration: const InputDecoration(
+                    labelText: 'License Number',
+                    hintText: 'Optional',
+                  ),
+                ),
+                const SizedBox(height: 20.0),
+
+                InkWell(
+                  onTap: () async {
+                    final picked = await showDatePicker(
+                      context: context,
+                      initialDate: _licenseValidTill ?? DateTime.now(),
+                      firstDate: DateTime(2000),
+                      lastDate: DateTime(2100),
+                    );
+                    if (picked != null && mounted) {
+                      setState(() => _licenseValidTill = picked);
+                    }
+                  },
+                  child: InputDecorator(
+                    decoration: const InputDecoration(
+                      labelText: 'License Valid Till',
+                      hintText: 'Optional',
+                      suffixIcon: Icon(Icons.calendar_today_outlined),
+                    ),
+                    child: Text(
+                      _licenseValidTill == null
+                          ? 'Select date'
+                          : '${_licenseValidTill!.year.toString().padLeft(4, '0')}-'
+                              '${_licenseValidTill!.month.toString().padLeft(2, '0')}-'
+                              '${_licenseValidTill!.day.toString().padLeft(2, '0')}',
+                      style: TextStyle(
+                        color: _licenseValidTill == null
+                            ? AppColors.textMuted
+                            : AppColors.textPrimary,
+                      ),
+                    ),
+                  ),
                 ),
                 const SizedBox(height: 20.0),
 

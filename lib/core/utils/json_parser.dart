@@ -172,6 +172,18 @@ class JsonParser {
     return defaultValue;
   }
 
+  /// Null when the field is missing or empty; otherwise a finite double.
+  static double? extractNullableDouble(dynamic value) {
+    if (value == null || value == '') return null;
+    if (value is num) return value.toDouble();
+    if (value is String) {
+      final trimmed = value.trim();
+      if (trimmed.isEmpty) return null;
+      return double.tryParse(trimmed);
+    }
+    return null;
+  }
+
   /// Safely extract an int value from dynamic input
   static int extractInt(dynamic value, int defaultValue) {
     if (value == null) return defaultValue;

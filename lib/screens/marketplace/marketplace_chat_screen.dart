@@ -7,18 +7,28 @@ import 'package:file_picker/file_picker.dart';
 import 'package:flutter/material.dart';
 import 'package:gal/gal.dart';
 import 'package:image_picker/image_picker.dart';
+import 'package:intl/intl.dart';
 import 'package:provider/provider.dart';
 import 'package:url_launcher/url_launcher.dart';
 
 import '../../core/config/api_config.dart';
 import '../../core/theme/app_colors.dart';
 import '../../core/utils/media_url.dart';
+import '../../core/utils/user_feedback.dart';
+import '../../data/models/marketplace_booking_model.dart';
+import '../../data/models/marketplace_payment_model.dart';
 import '../../data/models/marketplace_chat_models.dart';
+import '../../data/models/razorpay_payment_link_model.dart';
 import '../../providers/auth_provider.dart';
 import '../../providers/marketplace_chat_provider.dart';
+import '../../providers/marketplace_payment_provider.dart';
+import '../../screens/payments/marketplace_razorpay_checkout_screen.dart';
 import '../../services/marketplace_message_cache.dart';
+import '../../services/razorpay_payment_link_service.dart';
 import '../../services/socket_service.dart';
 import '../../services/vehicle_booking_service.dart';
+import '../../widgets/collect_extra_charges_sheet.dart';
+import '../../widgets/payment_request_card.dart';
 
 class MarketplaceChatScreen extends StatefulWidget {
   const MarketplaceChatScreen({
@@ -27,12 +37,18 @@ class MarketplaceChatScreen extends StatefulWidget {
     this.routeLabel,
     this.counterpartyLabel,
     this.counterpartyTransporterId,
+    this.openCollectPayment = false,
+    this.collectReferenceType,
+    this.collectReferenceId,
   });
 
   final String bookingId;
   final String? routeLabel;
   final String? counterpartyLabel;
   final String? counterpartyTransporterId;
+  final bool openCollectPayment;
+  final String? collectReferenceType;
+  final String? collectReferenceId;
 
   @override
   State<MarketplaceChatScreen> createState() => _MarketplaceChatScreenState();
@@ -41,6 +57,7 @@ class MarketplaceChatScreen extends StatefulWidget {
 class _MarketplaceChatScreenState extends State<MarketplaceChatScreen> {
   final VehicleBookingService _api = VehicleBookingService();
   final SocketService _socket = SocketService();
+  final RazorpayPaymentLinkService _paymentLinks = RazorpayPaymentLinkService();
   final TextEditingController _textCtrl = TextEditingController();
   final ScrollController _scrollCtrl = ScrollController();
   final List<MarketplaceMessage> _messages = [];
@@ -49,6 +66,9 @@ class _MarketplaceChatScreenState extends State<MarketplaceChatScreen> {
   String? _error;
   Map<String, dynamic>? _bookingDetail;
   bool _bookingActionsBusy = false;
+  bool _paymentActionBusy = false;
+  bool _collectBusy = false;
+  bool _autoCollectOpened = false;
   Timer? _typingDebounce;
   Timer? _sendFallbackTimer;
 
@@ -137,12 +157,24 @@ class _MarketplaceChatScreenState extends State<MarketplaceChatScreen> {
 
   String? _bookingStatus() => _bookingDetail?['status']?.toString();
 
+  bool _bookingHasLinkedTrip() {
+    final id = _linkedTripId();
+    return id != null && id.isNotEmpty;
+  }
+
+  bool _isConfirmedOrCompleted() {
+    final s = _bookingStatus()?.toUpperCase() ?? '';
+    return s == 'CONFIRMED' || s == 'COMPLETED' || _bookingHasLinkedTrip();
+  }
+
   bool _statusAllowsNegotiation() {
+    if (_isConfirmedOrCompleted()) return false;
     final s = _bookingStatus()?.toUpperCase() ?? '';
     return s == 'DRAFT' || s == 'REQUESTED' || s == 'NEGOTIATING';
   }
 
   bool _statusAllowsProposalActions() {
+    if (_isConfirmedOrCompleted()) return false;
     final s = _bookingStatus()?.toUpperCase() ?? '';
     return s == 'REQUESTED' || s == 'NEGOTIATING';
   }
@@ -160,10 +192,31 @@ class _MarketplaceChatScreenState extends State<MarketplaceChatScreen> {
     return _sameProposalPrice(m.proposedPrice, price);
   }
 
+  bool _currentProposalAcknowledged() {
+    return _refId(_bookingDetail?['proposalAcknowledgedBy']) != null;
+  }
+
+  bool _showOfferCard(MarketplaceMessage m) {
+    return _isLatestPriceProposal(m) && _statusAllowsProposalActions();
+  }
+
   bool _showIncomingProposalActions(MarketplaceMessage m, String? selfId) {
     if (selfId == null || _sameActorId(m.senderId, selfId)) return false;
-    if (!_statusAllowsProposalActions()) return false;
-    return _isLatestPriceProposal(m);
+    return _showOfferCard(m);
+  }
+
+  bool _hasIncomingPendingOffer(String? selfId) {
+    if (selfId == null || !_statusAllowsProposalActions()) return false;
+    if (_currentProposalAcknowledged()) return false;
+    final lp = _bookingDetail?['lastPriceProposal'];
+    if (lp is! Map) return false;
+    final by = _refId(lp['proposedBy']);
+    if (by == null || _sameActorId(by, selfId)) return false;
+    return true;
+  }
+
+  bool _offerActionsEnabled() {
+    return !_bookingActionsBusy && !_currentProposalAcknowledged();
   }
 
   bool _isSeller(String? selfId) {
@@ -174,6 +227,7 @@ class _MarketplaceChatScreenState extends State<MarketplaceChatScreen> {
 
   bool _sellerCanConfirmBooking(String? selfId) {
     if (!_isSeller(selfId) || !_statusAllowsProposalActions()) return false;
+    if (_bookingHasLinkedTrip()) return false;
     final lp = _bookingDetail?['lastPriceProposal'];
     if (lp is! Map) return false;
     final lastBy = _refId(lp['proposedBy']);
@@ -242,6 +296,243 @@ class _MarketplaceChatScreenState extends State<MarketplaceChatScreen> {
     return _sameActorId(bid, selfId) && _statusAllowsNegotiation();
   }
 
+  bool _isBuyer(String? selfId) {
+    if (selfId == null || _bookingDetail == null) return false;
+    final bid = _refId(_bookingDetail!['buyerId']);
+    return _sameActorId(bid, selfId);
+  }
+
+  bool _buyerCanSubmit(String? selfId) {
+    if (!_isBuyer(selfId) || _isConfirmedOrCompleted()) return false;
+    final s = _bookingStatus()?.toUpperCase() ?? '';
+    return s == 'DRAFT' || s == 'NEGOTIATING';
+  }
+
+  MarketplaceBookingDetail? _typedBooking() =>
+      MarketplaceBookingDetail.fromJson(_bookingDetail);
+
+  String? _linkedTripId() {
+    final typed = _typedBooking();
+    if (typed?.hasLinkedTrip == true) return typed!.linkedTripId;
+    return _refId(_bookingDetail?['tripId']);
+  }
+
+  bool _showViewTripLink() {
+    final s = _bookingStatus()?.toUpperCase() ?? '';
+    if (s != 'CONFIRMED' && s != 'COMPLETED') return false;
+    final tripId = _linkedTripId();
+    return tripId != null && tripId.isNotEmpty;
+  }
+
+  bool _showPaymentSummaryBanner() {
+    if (_showTripComplete()) return false;
+    final s = _bookingStatus()?.toUpperCase() ?? '';
+    if (s == 'COMPLETED') return false;
+    if (s != 'CONFIRMED') return false;
+    return _bookingHasLinkedTrip();
+  }
+
+  bool _beginBookingAction({Map<String, dynamic>? optimisticPatch}) {
+    if (_bookingActionsBusy) return false;
+    setState(() {
+      _bookingActionsBusy = true;
+      if (optimisticPatch != null && _bookingDetail != null) {
+        _bookingDetail = {..._bookingDetail!, ...optimisticPatch};
+      }
+    });
+    return true;
+  }
+
+  Future<void> _refreshStateAfterFailedAction() async {
+    await _refreshBookingDetail();
+    await _syncFromServer();
+    if (mounted) {
+      await _loadConversationsNextFrame();
+    }
+  }
+
+  Future<void> _submitBookingAsBuyer() async {
+    if (!_beginBookingAction()) return;
+    try {
+      await _api.submitBooking(widget.bookingId);
+      if (!mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(
+          content: Text('Booking submitted — waiting for seller confirmation'),
+        ),
+      );
+      await _refreshBookingDetail();
+      await _syncFromServer();
+      if (mounted) {
+        await _loadConversationsNextFrame();
+      }
+    } catch (e) {
+      await _refreshStateAfterFailedAction();
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(content: Text(e.toString().replaceFirst('Exception: ', ''))),
+        );
+      }
+    } finally {
+      if (mounted) setState(() => _bookingActionsBusy = false);
+    }
+  }
+
+  void _openLinkedTrip() {
+    final tripId = _linkedTripId();
+    if (tripId == null || tripId.isEmpty) return;
+    Navigator.of(context).pushNamed('/trip-detail', arguments: tripId);
+  }
+
+  Widget _buildPaymentSummaryBanner(TextTheme theme) {
+    final tripId = _linkedTripId();
+    if (tripId == null) return const SizedBox.shrink();
+    final typed = _typedBooking();
+    final agreed = typed?.agreedPrice;
+    final self = _actorId();
+    final buyerView = _isBuyer(self);
+    final sellerView = _isSeller(self);
+
+    return Consumer<MarketplacePaymentProvider>(
+      builder: (context, payProvider, _) {
+        final status = payProvider.statusFor(tripId);
+        if (status == null && !payProvider.isLoading(tripId)) {
+          WidgetsBinding.instance.addPostFrameCallback((_) {
+            if (mounted) payProvider.loadStatus(tripId, silent: true);
+          });
+        }
+        final ui = payProvider.uiStateFor(tripId);
+        final amountStr = agreed != null
+            ? NumberFormat.currency(locale: 'en_IN', symbol: '₹', decimalDigits: 0)
+                .format(agreed)
+            : null;
+        final payAmount = status?.payment?.amount ?? agreed;
+
+        String summary;
+        if (sellerView && !buyerView) {
+          summary = marketplacePayoutSummary(status?.payout?.status);
+        } else {
+          summary = status?.buyerSummaryLine() ??
+              marketplacePaymentSummary(ui, waitingForBank: status?.waitingForBank == true);
+        }
+
+        final cta = buyerView ? status?.buyerCtaLabel() : null;
+
+        return Material(
+          color: AppColors.offWhite,
+          child: Padding(
+            padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 10),
+            child: Row(
+              children: [
+                Icon(
+                  sellerView && !buyerView
+                      ? Icons.account_balance_outlined
+                      : Icons.payment_outlined,
+                  color: AppColors.primary,
+                  size: 22,
+                ),
+                const SizedBox(width: 12),
+                Expanded(
+                  child: Column(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      Text(
+                        amountStr != null ? 'Trip · $amountStr' : 'Linked trip',
+                        style: theme.bodyMedium?.copyWith(
+                          fontWeight: FontWeight.w600,
+                          color: AppColors.textPrimary,
+                        ),
+                      ),
+                      Text(
+                        summary,
+                        style: theme.bodySmall?.copyWith(
+                          color: AppColors.textSecondary,
+                        ),
+                      ),
+                    ],
+                  ),
+                ),
+                if (cta != null)
+                  Padding(
+                    padding: const EdgeInsets.only(right: 4),
+                    child: FilledButton(
+                      onPressed: _paymentActionBusy
+                          ? null
+                          : () => unawaited(_payNowFromChat(payProvider, tripId)),
+                      child: _paymentActionBusy
+                          ? const SizedBox(
+                              width: 18,
+                              height: 18,
+                              child: CircularProgressIndicator(strokeWidth: 2),
+                            )
+                          : Text(
+                              payAmount != null && ui != MarketplacePaymentUiState.retry
+                                  ? '$cta ${_formatPayAmount(payAmount)}'
+                                  : cta,
+                            ),
+                    ),
+                  )
+                else
+                  TextButton(onPressed: _openLinkedTrip, child: const Text('View trip')),
+              ],
+            ),
+          ),
+        );
+      },
+    );
+  }
+
+  String _formatPayAmount(num amount) {
+    return NumberFormat.currency(locale: 'en_IN', symbol: '₹', decimalDigits: 0)
+        .format(amount);
+  }
+
+  Future<void> _payNowFromChat(
+    MarketplacePaymentProvider provider,
+    String tripId,
+  ) async {
+    if (_paymentActionBusy) return;
+    final user = context.read<AuthProvider>().user;
+    if (user == null) return;
+    setState(() => _paymentActionBusy = true);
+    try {
+      final name = (user.company?.trim().isNotEmpty == true
+              ? user.company
+              : user.name) ??
+          'Transporter';
+      final email = '${user.mobile}@porttivo.app';
+      final initiate = await provider.initiatePayment(
+        tripId: tripId,
+        payerName: name,
+        payerEmail: email,
+        payerPhone: user.mobile,
+      );
+      if (!mounted || initiate.fields == null) return;
+      final paid = await Navigator.push<bool>(
+        context,
+        MaterialPageRoute<bool>(
+          builder: (_) => MarketplaceRazorpayCheckoutScreen(
+            tripId: tripId,
+            fields: initiate.fields!,
+          ),
+        ),
+      );
+      if (paid == true && mounted) {
+        showUserSuccessSnackBar(context, 'Payment successful');
+      }
+      if (mounted) {
+        await provider.loadStatus(tripId);
+      }
+    } catch (e) {
+      if (!mounted) return;
+      await provider.loadStatus(tripId, silent: true);
+      if (!mounted) return;
+      showUserErrorSnackBar(context, e);
+    } finally {
+      if (mounted) setState(() => _paymentActionBusy = false);
+    }
+  }
+
   Future<void> _refreshBookingDetail() async {
     try {
       final b = await _api.fetchBookingDetail(widget.bookingId);
@@ -251,6 +542,7 @@ class _MarketplaceChatScreenState extends State<MarketplaceChatScreen> {
   }
 
   Future<void> _openNegotiateModal() async {
+    if (_bookingActionsBusy) return;
     final est = _bookingDetail?['estimatedPrice'];
     final listed = est is num ? est : num.tryParse('$est');
     final result = await showDialog<_NegotiateDialogResult>(
@@ -258,8 +550,8 @@ class _MarketplaceChatScreenState extends State<MarketplaceChatScreen> {
       builder: (ctx) => _NegotiatePriceDialog(referencePrice: listed),
     );
     if (result == null || !mounted) return;
+    if (!_beginBookingAction()) return;
     try {
-      setState(() => _bookingActionsBusy = true);
       await _api.proposePrice(
         bookingId: widget.bookingId,
         proposedPrice: result.price,
@@ -271,6 +563,7 @@ class _MarketplaceChatScreenState extends State<MarketplaceChatScreen> {
         await _loadConversationsNextFrame();
       }
     } catch (e) {
+      await _refreshStateAfterFailedAction();
       if (mounted) {
         ScaffoldMessenger.of(context).showSnackBar(
           SnackBar(content: Text(e.toString().replaceFirst('Exception: ', ''))),
@@ -282,8 +575,13 @@ class _MarketplaceChatScreenState extends State<MarketplaceChatScreen> {
   }
 
   Future<void> _onAcceptProposal() async {
+    final self = _actorId();
+    if (!_beginBookingAction(
+      optimisticPatch: self == null ? null : {'proposalAcknowledgedBy': self},
+    )) {
+      return;
+    }
     try {
-      setState(() => _bookingActionsBusy = true);
       await _api.acceptProposal(widget.bookingId);
       await _refreshBookingDetail();
       await _syncFromServer();
@@ -291,7 +589,6 @@ class _MarketplaceChatScreenState extends State<MarketplaceChatScreen> {
         await _loadConversationsNextFrame();
       }
       if (!mounted) return;
-      final self = _actorId();
       if (_isSeller(self)) {
         ScaffoldMessenger.of(context).showSnackBar(
           SnackBar(
@@ -312,6 +609,7 @@ class _MarketplaceChatScreenState extends State<MarketplaceChatScreen> {
         );
       }
     } catch (e) {
+      await _refreshStateAfterFailedAction();
       if (mounted) {
         ScaffoldMessenger.of(context).showSnackBar(
           SnackBar(content: Text(e.toString().replaceFirst('Exception: ', ''))),
@@ -323,8 +621,8 @@ class _MarketplaceChatScreenState extends State<MarketplaceChatScreen> {
   }
 
   Future<void> _onDeclineProposal() async {
+    if (!_beginBookingAction()) return;
     try {
-      setState(() => _bookingActionsBusy = true);
       await _api.declineProposal(widget.bookingId);
       await _refreshBookingDetail();
       await _syncFromServer();
@@ -332,6 +630,7 @@ class _MarketplaceChatScreenState extends State<MarketplaceChatScreen> {
         await _loadConversationsNextFrame();
       }
     } catch (e) {
+      await _refreshStateAfterFailedAction();
       if (mounted) {
         ScaffoldMessenger.of(context).showSnackBar(
           SnackBar(content: Text(e.toString().replaceFirst('Exception: ', ''))),
@@ -343,8 +642,8 @@ class _MarketplaceChatScreenState extends State<MarketplaceChatScreen> {
   }
 
   Future<void> _confirmBookingAsSeller() async {
+    if (!_beginBookingAction()) return;
     try {
-      setState(() => _bookingActionsBusy = true);
       await _api.acceptBooking(widget.bookingId);
       if (!mounted) return;
       ScaffoldMessenger.of(context).showSnackBar(
@@ -356,6 +655,7 @@ class _MarketplaceChatScreenState extends State<MarketplaceChatScreen> {
         await _loadConversationsNextFrame();
       }
     } catch (e) {
+      await _refreshStateAfterFailedAction();
       if (mounted) {
         ScaffoldMessenger.of(context).showSnackBar(
           SnackBar(content: Text(e.toString().replaceFirst('Exception: ', ''))),
@@ -367,13 +667,14 @@ class _MarketplaceChatScreenState extends State<MarketplaceChatScreen> {
   }
 
   Future<void> _onRejectBooking() async {
+    if (_bookingActionsBusy) return;
     final reason = await showDialog<String?>(
       context: context,
       builder: (ctx) => const _RejectBookingDialog(),
     );
     if (reason == null || !mounted) return;
+    if (!_beginBookingAction()) return;
     try {
-      setState(() => _bookingActionsBusy = true);
       await _api.rejectBooking(
         widget.bookingId,
         reason: reason.isEmpty ? null : reason,
@@ -388,6 +689,7 @@ class _MarketplaceChatScreenState extends State<MarketplaceChatScreen> {
         await _loadConversationsNextFrame();
       }
     } catch (e) {
+      await _refreshStateAfterFailedAction();
       if (mounted) {
         ScaffoldMessenger.of(context).showSnackBar(
           SnackBar(content: Text(e.toString().replaceFirst('Exception: ', ''))),
@@ -399,6 +701,7 @@ class _MarketplaceChatScreenState extends State<MarketplaceChatScreen> {
   }
 
   Future<void> _onCancelBooking() async {
+    if (_bookingActionsBusy) return;
     final st = _bookingStatus()?.toUpperCase() ?? '';
     final isDraft = st == 'DRAFT';
     final note = await showDialog<String?>(
@@ -406,8 +709,8 @@ class _MarketplaceChatScreenState extends State<MarketplaceChatScreen> {
       builder: (ctx) => _CancelBookingDialog(isDraft: isDraft),
     );
     if (note == null || !mounted) return;
+    if (!_beginBookingAction()) return;
     try {
-      setState(() => _bookingActionsBusy = true);
       await _api.cancelBooking(widget.bookingId, reason: note.isEmpty ? null : note);
       if (!mounted) return;
       ScaffoldMessenger.of(context).showSnackBar(
@@ -419,6 +722,7 @@ class _MarketplaceChatScreenState extends State<MarketplaceChatScreen> {
         await _loadConversationsNextFrame();
       }
     } catch (e) {
+      await _refreshStateAfterFailedAction();
       if (mounted) {
         ScaffoldMessenger.of(context).showSnackBar(
           SnackBar(content: Text(e.toString().replaceFirst('Exception: ', ''))),
@@ -509,6 +813,100 @@ class _MarketplaceChatScreenState extends State<MarketplaceChatScreen> {
     _socket.emitChatThreadJoin(widget.bookingId);
     await _syncFromServer();
     await _refreshBookingDetail();
+    if (!mounted) return;
+    if (widget.openCollectPayment && !_autoCollectOpened) {
+      _autoCollectOpened = true;
+      unawaited(_collectExtraCharges());
+    }
+  }
+
+  String? _counterpartyId(String? selfId) {
+    final explicit = widget.counterpartyTransporterId?.trim();
+    if (explicit != null && explicit.isNotEmpty) return explicit;
+    final buyer = _refId(_bookingDetail?['buyerId']);
+    final seller = _refId(_bookingDetail?['sellerId']);
+    if (selfId != null && _sameActorId(selfId, buyer)) return seller;
+    if (selfId != null && _sameActorId(selfId, seller)) return buyer;
+    return buyer ?? seller;
+  }
+
+  bool _canCollectExtraCharges() {
+    return !_isTerminalBookingStatus();
+  }
+
+  Future<int?> _pendingExtraChargeMessageIndex() async {
+    for (var i = _messages.length - 1; i >= 0; i--) {
+      final parsed = ExtraChargePaymentRequest.tryParse(_messages[i].content);
+      if (parsed == null) continue;
+      try {
+        final status = await _paymentLinks.getStatus(parsed.recordId);
+        if (status.isCreated) return i;
+      } catch (_) {}
+    }
+    return null;
+  }
+
+  void _scrollToMessageIndex(int index) {
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      if (!_scrollCtrl.hasClients) return;
+      final max = _scrollCtrl.position.maxScrollExtent;
+      final estimated = (_messages.isEmpty ? 0 : (index / _messages.length) * max)
+          .clamp(0, max)
+          .toDouble();
+      _scrollCtrl.animateTo(
+        estimated,
+        duration: const Duration(milliseconds: 250),
+        curve: Curves.easeOut,
+      );
+    });
+  }
+
+  Future<void> _collectExtraCharges() async {
+    if (!_canCollectExtraCharges() || _collectBusy || _bookingActionsBusy) return;
+    setState(() => _collectBusy = true);
+    try {
+      final pendingIndex = await _pendingExtraChargeMessageIndex();
+      if (!mounted) return;
+      if (pendingIndex != null) {
+        showUserErrorSnackBar(
+          context,
+          'A payment link is already waiting. Ask the other transporter to pay it, or cancel it first.',
+        );
+        _scrollToMessageIndex(pendingIndex);
+        return;
+      }
+
+      final result = await CollectExtraChargesSheet.show(context);
+      if (result == null || !mounted) return;
+
+      final selfId = _actorId();
+      final payerId = _counterpartyId(selfId);
+      if (payerId == null || payerId.isEmpty) {
+        showUserErrorSnackBar(context, 'Could not find the other transporter for this chat.');
+        return;
+      }
+
+      final created = await _paymentLinks.create(
+        amount: result.amount,
+        description: result.description,
+        referenceType: widget.collectReferenceType ?? 'BOOKING',
+        referenceId: widget.collectReferenceId ?? widget.bookingId,
+        payerTransporterId: payerId,
+      );
+      if (!mounted) return;
+
+      final body = ExtraChargePaymentRequest.encode(
+        amount: created.amount,
+        description: result.description,
+        shortUrl: created.shortUrl!,
+        recordId: created.id,
+      );
+      _sendTextContent(body);
+    } catch (e) {
+      if (mounted) showUserErrorSnackBar(context, e);
+    } finally {
+      if (mounted) setState(() => _collectBusy = false);
+    }
   }
 
   /// Coalesces overlapping syncs (e.g. reject + socket `booking:rejected`).
@@ -644,7 +1042,7 @@ class _MarketplaceChatScreenState extends State<MarketplaceChatScreen> {
     final event = payload['_event']?.toString();
     if (event == 'chat:typing') return;
 
-    if (event == 'booking:price-proposed') {
+    if (event == 'booking:price-proposed' || event == 'booking:price-accepted') {
       final b = payload['booking'];
       if (b is Map) {
         _applyBookingDetailFromSocketMap(Map<dynamic, dynamic>.from(b));
@@ -941,7 +1339,11 @@ class _MarketplaceChatScreenState extends State<MarketplaceChatScreen> {
     }
 
     _textCtrl.clear();
+    _sendTextContent(t);
+  }
 
+  void _sendTextContent(String t) {
+    if (t.isEmpty) return;
     final self = _actorId();
     if (self == null) return;
 
@@ -958,6 +1360,7 @@ class _MarketplaceChatScreenState extends State<MarketplaceChatScreen> {
     );
     setState(() => _messages.add(pending));
     unawaited(_persistCache());
+    _scrollToEnd();
 
     final socketSent = _socket.sendChatMessage(widget.bookingId, t);
     if (socketSent) {
@@ -1114,6 +1517,20 @@ class _MarketplaceChatScreenState extends State<MarketplaceChatScreen> {
         foregroundColor: AppColors.textPrimary,
         elevation: 0,
         actions: [
+          if (_canCollectExtraCharges())
+            IconButton(
+              tooltip: 'Collect extra charges',
+              onPressed: _collectBusy || _bookingActionsBusy
+                  ? null
+                  : _collectExtraCharges,
+              icon: const Icon(Icons.payments_outlined),
+            ),
+          if (_showViewTripLink())
+            TextButton.icon(
+              onPressed: _openLinkedTrip,
+              icon: const Icon(Icons.local_shipping_outlined, size: 18),
+              label: const Text('View trip'),
+            ),
           Padding(
             padding: const EdgeInsets.only(right: 12),
             child: Center(
@@ -1164,6 +1581,7 @@ class _MarketplaceChatScreenState extends State<MarketplaceChatScreen> {
                 ),
               ),
             ),
+          if (_showPaymentSummaryBanner()) _buildPaymentSummaryBanner(theme),
           if (_showTripComplete())
             Material(
               color: Colors.green.shade50,
@@ -1235,6 +1653,7 @@ class _MarketplaceChatScreenState extends State<MarketplaceChatScreen> {
                             ),
                           );
                         }
+                        final extraCharge = ExtraChargePaymentRequest.tryParse(m.content);
                         return Align(
                           alignment: mine ? Alignment.centerRight : Alignment.centerLeft,
                           child: Container(
@@ -1254,12 +1673,19 @@ class _MarketplaceChatScreenState extends State<MarketplaceChatScreen> {
                                   mine ? CrossAxisAlignment.end : CrossAxisAlignment.start,
                               children: [
                                 _buildMessageAttachments(m, mine, theme),
-                                if (m.content.trim().isNotEmpty)
+                                if (extraCharge != null)
+                                  PaymentRequestCard(
+                                    request: extraCharge,
+                                    isCreator: mine,
+                                  )
+                                else if (m.content.trim().isNotEmpty)
                                   Text(
                                     m.content,
                                     style: theme.bodyMedium?.copyWith(color: AppColors.textPrimary),
                                   ),
-                                if (m.proposedPrice != null)
+                                if (_showOfferCard(m))
+                                  _buildOfferCard(m, selfId, theme)
+                                else if (m.proposedPrice != null)
                                   Padding(
                                     padding: const EdgeInsets.only(top: 4),
                                     child: Text(
@@ -1270,43 +1696,6 @@ class _MarketplaceChatScreenState extends State<MarketplaceChatScreen> {
                                       ),
                                     ),
                                   ),
-                                if (_showIncomingProposalActions(m, selfId)) ...[
-                                  const SizedBox(height: 10),
-                                  Material(
-                                    type: MaterialType.transparency,
-                                    child: Row(
-                                      children: [
-                                        Expanded(
-                                          child: SizedBox(
-                                            height: 48,
-                                            child: OutlinedButton(
-                                              onPressed: _bookingActionsBusy
-                                                  ? null
-                                                  : () {
-                                                      unawaited(_onDeclineProposal());
-                                                    },
-                                              child: const Text('Decline'),
-                                            ),
-                                          ),
-                                        ),
-                                        const SizedBox(width: 8),
-                                        Expanded(
-                                          child: SizedBox(
-                                            height: 48,
-                                            child: FilledButton(
-                                              onPressed: _bookingActionsBusy
-                                                  ? null
-                                                  : () {
-                                                      unawaited(_onAcceptProposal());
-                                                    },
-                                              child: const Text('Accept'),
-                                            ),
-                                          ),
-                                        ),
-                                      ],
-                                    ),
-                                  ),
-                                ],
                                 const SizedBox(height: 4),
                                 Row(
                                   mainAxisSize: MainAxisSize.min,
@@ -1336,6 +1725,21 @@ class _MarketplaceChatScreenState extends State<MarketplaceChatScreen> {
                     ),
                   ),
           ),
+          if (_buyerCanSubmit(selfId))
+            Material(
+              color: AppColors.offWhite,
+              child: Padding(
+                padding: const EdgeInsets.fromLTRB(12, 8, 12, 4),
+                child: SizedBox(
+                  width: double.infinity,
+                  child: FilledButton.icon(
+                    onPressed: _bookingActionsBusy ? null : _submitBookingAsBuyer,
+                    icon: const Icon(Icons.send_outlined),
+                    label: const Text('Submit booking to seller'),
+                  ),
+                ),
+              ),
+            ),
           if (_sellerCanConfirmBooking(selfId))
             Material(
               color: AppColors.offWhite,
@@ -1374,7 +1778,7 @@ class _MarketplaceChatScreenState extends State<MarketplaceChatScreen> {
                 ],
               ),
             ),
-          if (_statusAllowsNegotiation())
+          if (_statusAllowsNegotiation() && !_hasIncomingPendingOffer(selfId))
             Padding(
               padding: const EdgeInsets.fromLTRB(12, 4, 12, 4),
               child: SizedBox(
@@ -1383,6 +1787,20 @@ class _MarketplaceChatScreenState extends State<MarketplaceChatScreen> {
                   onPressed: _bookingActionsBusy ? null : _openNegotiateModal,
                   icon: const Icon(Icons.handshake_outlined),
                   label: const Text('Propose price'),
+                ),
+              ),
+            ),
+          if (_canCollectExtraCharges())
+            Padding(
+              padding: const EdgeInsets.fromLTRB(12, 4, 12, 4),
+              child: SizedBox(
+                width: double.infinity,
+                child: OutlinedButton.icon(
+                  onPressed: _collectBusy || _bookingActionsBusy
+                      ? null
+                      : _collectExtraCharges,
+                  icon: const Icon(Icons.payments_outlined),
+                  label: const Text('Collect extra charges'),
                 ),
               ),
             ),
@@ -1488,6 +1906,106 @@ class _MarketplaceChatScreenState extends State<MarketplaceChatScreen> {
   String _timeFmt(DateTime d) {
     final t = TimeOfDay.fromDateTime(d.toLocal());
     return '${t.hour.toString().padLeft(2, '0')}:${t.minute.toString().padLeft(2, '0')}';
+  }
+
+  Widget _buildOfferCard(
+    MarketplaceMessage m,
+    String? selfId,
+    TextTheme theme,
+  ) {
+    final acknowledged = _currentProposalAcknowledged();
+    final incoming = _showIncomingProposalActions(m, selfId);
+    final enabled = incoming && _offerActionsEnabled();
+    final statusLabel = acknowledged ? 'Accepted' : 'Awaiting response';
+    final statusColor = acknowledged ? AppColors.success : AppColors.textSecondary;
+
+    return Padding(
+      padding: const EdgeInsets.only(top: 8),
+      child: Container(
+        width: double.infinity,
+        padding: const EdgeInsets.all(10),
+        decoration: BoxDecoration(
+          color: Colors.white.withValues(alpha: 0.7),
+          borderRadius: BorderRadius.circular(10),
+          border: Border.all(color: AppColors.dividerGrey),
+        ),
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            Text(
+              'Offer: ₹${m.proposedPrice}',
+              style: theme.titleSmall?.copyWith(
+                color: AppColors.primary,
+                fontWeight: FontWeight.w700,
+              ),
+            ),
+            const SizedBox(height: 4),
+            Text(
+              'Status: $statusLabel',
+              style: theme.labelMedium?.copyWith(
+                color: statusColor,
+                fontWeight: FontWeight.w600,
+              ),
+            ),
+            if (incoming) ...[
+              const SizedBox(height: 10),
+              Material(
+                type: MaterialType.transparency,
+                child: Column(
+                  children: [
+                    Row(
+                      children: [
+                        Expanded(
+                          child: SizedBox(
+                            height: 44,
+                            child: OutlinedButton(
+                              onPressed: enabled
+                                  ? () {
+                                      unawaited(_onDeclineProposal());
+                                    }
+                                  : null,
+                              child: const Text('Reject'),
+                            ),
+                          ),
+                        ),
+                        const SizedBox(width: 8),
+                        Expanded(
+                          child: SizedBox(
+                            height: 44,
+                            child: FilledButton(
+                              onPressed: enabled
+                                  ? () {
+                                      unawaited(_onAcceptProposal());
+                                    }
+                                  : null,
+                              child: Text(acknowledged ? 'Accepted' : 'Accept'),
+                            ),
+                          ),
+                        ),
+                      ],
+                    ),
+                    const SizedBox(height: 8),
+                    SizedBox(
+                      width: double.infinity,
+                      height: 44,
+                      child: OutlinedButton.icon(
+                        onPressed: enabled
+                            ? () {
+                                unawaited(_openNegotiateModal());
+                              }
+                            : null,
+                        icon: const Icon(Icons.handshake_outlined, size: 18),
+                        label: const Text('Counter'),
+                      ),
+                    ),
+                  ],
+                ),
+              ),
+            ],
+          ],
+        ),
+      ),
+    );
   }
 }
 

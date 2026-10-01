@@ -111,60 +111,72 @@ class AuthService {
     }
   }
 
-  Future<AuthResponseModel> sendOTP(String mobile, String userType) async {
-    try {
-      if (kDebugMode) {
-        print('AuthService: Sending OTP for mobile: $mobile, userType: $userType');
-      }
-      
-      final response = await _api.post(
-        ApiConfig.sendOTP,
-        data: {
-          'mobile': mobile,
-          'userType': userType,
-        },
+  Future<void> _persistAuthSession(AuthData data) async {
+    await _storage.init();
+    await _storage.saveAccessToken(data.accessToken);
+    await _storage.saveRefreshToken(data.refreshToken);
+    final userId = data.user.transporterId ?? data.user.id;
+    await _storage.saveTransporterId(userId);
+    await _storage.saveUserData(data.user.id);
+  }
+
+  Future<SendOtpResponse> sendOTP(String mobile, String userType) async {
+    final response = await _api.post(
+      ApiConfig.sendOTP,
+      data: {
+        'mobile': mobile,
+        'userType': userType,
+      },
+    );
+    final body = response.data;
+    if (body is! Map) {
+      throw Exception('Failed to send OTP');
+    }
+    return SendOtpResponse.fromJson(Map<String, dynamic>.from(body));
+  }
+
+  Future<AuthResponseModel> verifyOTP({
+    required String mobile,
+    required String otp,
+    required String userType,
+  }) async {
+    final response = await _api.post(
+      ApiConfig.verifyOTP,
+      data: {
+        'mobile': mobile,
+        'userType': userType,
+        'otp': otp,
+      },
+    );
+    final body = response.data;
+    if (body is! Map) {
+      throw Exception('Failed to verify OTP');
+    }
+    final authResponse = AuthResponseModel.fromJson(Map<String, dynamic>.from(body));
+    if (authResponse.success && authResponse.data != null) {
+      await _persistAuthSession(authResponse.data!);
+    }
+    return authResponse;
+  }
+
+  Future<void> resendOTP({
+    required String mobile,
+    required String userType,
+    String retryType = 'text',
+  }) async {
+    final response = await _api.post(
+      ApiConfig.resendOTP,
+      data: {
+        'mobile': mobile,
+        'userType': userType,
+        'retryType': retryType,
+      },
+    );
+    final body = response.data;
+    if (body is! Map || body['success'] != true) {
+      throw Exception(
+        body is Map ? body['message']?.toString() ?? 'Failed to resend OTP' : 'Failed to resend OTP',
       );
-
-      if (kDebugMode) {
-        print('AuthService: OTP response received');
-      }
-
-      final authResponse = AuthResponseModel.fromJson(response.data);
-
-      if (authResponse.success && authResponse.data != null) {
-        if (kDebugMode) {
-          print('AuthService: OTP successful, saving tokens and user data');
-        }
-        // Ensure storage is initialized
-        await _storage.init();
-        
-        // Save tokens
-        await _storage.saveAccessToken(authResponse.data!.accessToken);
-        await _storage.saveRefreshToken(authResponse.data!.refreshToken);
-
-        // Verify tokens were saved
-        final savedAccessToken = await _storage.getAccessToken();
-        final savedRefreshToken = await _storage.getRefreshToken();
-        if (kDebugMode) {
-          print('AuthService: Token verification - Access: ${savedAccessToken != null}, Refresh: ${savedRefreshToken != null}');
-        }
-
-        // Save user data
-        await _storage.saveTransporterId(authResponse.data!.user.id);
-        await _storage.saveUserData(authResponse.data!.user.id);
-      } else {
-        if (kDebugMode) {
-          print('AuthService: OTP failed: ${authResponse.message}');
-        }
-      }
-
-      return authResponse;
-    } catch (e, stackTrace) {
-      if (kDebugMode) {
-        print('AuthService: Error sending OTP: $e');
-        print('Stack: $stackTrace');
-      }
-      rethrow;
     }
   }
 

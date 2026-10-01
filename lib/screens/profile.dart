@@ -166,6 +166,25 @@ class _ProfileScreenState extends State<ProfileScreen> {
             ),
             const SizedBox(height: 32.0),
 
+            _buildSectionTitle('KYC', textTheme),
+            const SizedBox(height: 16.0),
+            _buildInfoCard(
+              icon: Icons.verified_user_outlined,
+              label: 'KYC status',
+              value: _transporter!.isKycCompleted
+                  ? 'Completed'
+                  : (_transporter!.kycStatus?.isNotEmpty == true
+                      ? _transporter!.kycStatus!
+                      : 'Pending'),
+              textTheme: textTheme,
+              valueColor: _transporter!.isKycCompleted
+                  ? AppColors.success
+                  : AppColors.warning,
+            ),
+            const SizedBox(height: 12.0),
+            _buildKycDocumentsTile(textTheme),
+            const SizedBox(height: 32.0),
+
             // Company Information
             _buildSectionTitle('Company Information', textTheme),
             const SizedBox(height: 16.0),
@@ -393,6 +412,59 @@ class _ProfileScreenState extends State<ProfileScreen> {
       setState(() => _isSavingCountry = false);
       showUserErrorSnackBar(context, e, fallback: 'Failed to update operating country');
     }
+  }
+
+  Widget _buildKycDocumentsTile(TextTheme textTheme) {
+    return InkWell(
+      onTap: () => Navigator.of(context).pushNamed('/kyc-documents'),
+      borderRadius: BorderRadius.circular(12.0),
+      child: Container(
+        padding: const EdgeInsets.all(16.0),
+        decoration: BoxDecoration(
+          color: AppColors.offWhite,
+          borderRadius: BorderRadius.circular(12.0),
+          border: Border.all(
+            color: AppColors.dividerGrey,
+            width: 1.0,
+          ),
+        ),
+        child: Row(
+          children: [
+            const Icon(
+              Icons.folder_open_outlined,
+              color: AppColors.primary,
+              size: 24.0,
+            ),
+            const SizedBox(width: 16.0),
+            Expanded(
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  Text(
+                    'View KYC documents',
+                    style: textTheme.bodyMedium?.copyWith(
+                      color: AppColors.textPrimary,
+                      fontWeight: FontWeight.w500,
+                    ),
+                  ),
+                  const SizedBox(height: 4.0),
+                  Text(
+                    'PAN and Aadhaar uploads',
+                    style: textTheme.bodySmall?.copyWith(
+                      color: AppColors.textSecondary,
+                    ),
+                  ),
+                ],
+              ),
+            ),
+            const Icon(
+              Icons.chevron_right,
+              color: AppColors.textMuted,
+            ),
+          ],
+        ),
+      ),
+    );
   }
 
   Widget _buildSectionTitle(String title, TextTheme textTheme) {

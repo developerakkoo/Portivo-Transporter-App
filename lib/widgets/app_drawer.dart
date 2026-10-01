@@ -2,8 +2,10 @@ import 'package:flutter/material.dart';
 import 'package:provider/provider.dart';
 
 import '../core/constants/app_copy.dart';
+import '../core/navigation/app_navigator.dart';
 import '../core/theme/app_colors.dart';
 import '../providers/auth_provider.dart';
+import '../providers/navigation_state_provider.dart';
 import '../services/permission_service.dart';
 
 class AppDrawer extends StatelessWidget {
@@ -71,6 +73,23 @@ class AppDrawer extends StatelessWidget {
                         onTap: () => _navigate(context, '/profile'),
                       ),
                       AppDrawerMenuTile(
+                        icon: Icons.account_balance_outlined,
+                        title: 'Bank Account Details',
+                        onTap: () => _navigate(context, '/bank-account'),
+                      ),
+                      if (permissionService.hasPermission('manageWallet') ||
+                          permissionService.isTransporter)
+                        AppDrawerMenuTile(
+                          icon: Icons.payments_outlined,
+                          title: 'Payments',
+                          onTap: () {
+                            Navigator.of(context).pop();
+                            context
+                                .read<NavigationStateProvider>()
+                                .requestOpenPaymentsTab();
+                          },
+                        ),
+                      AppDrawerMenuTile(
                         icon: Icons.map_outlined,
                         title: 'View Map',
                         onTap: () => _navigate(context, '/map'),
@@ -81,6 +100,13 @@ class AppDrawer extends StatelessWidget {
                           icon: Icons.inventory_2_outlined,
                           title: 'Vehicles',
                           onTap: () => _navigate(context, '/vehicles'),
+                        ),
+                      if (permissionService.hasPermission('manageDrivers') ||
+                          permissionService.isTransporter)
+                        AppDrawerMenuTile(
+                          icon: Icons.people_outlined,
+                          title: 'Drivers',
+                          onTap: () => _navigate(context, '/drivers'),
                         ),
                       if (permissionService.hasPermission('manageWallet') ||
                           permissionService.isTransporter)
@@ -182,11 +208,10 @@ class AppDrawerLogoutButton extends StatelessWidget {
             onPressed: authProvider.isLoading
                 ? null
                 : () async {
+                    final rootNav = appNavigatorKey.currentState;
                     Navigator.of(context).pop();
                     await authProvider.logout();
-                    if (context.mounted) {
-                      Navigator.of(context).pushReplacementNamed('/login');
-                    }
+                    rootNav?.pushReplacementNamed('/login');
                   },
             style: OutlinedButton.styleFrom(
               side: const BorderSide(color: AppColors.error),

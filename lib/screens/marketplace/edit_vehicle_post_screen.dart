@@ -4,11 +4,13 @@ import 'package:provider/provider.dart';
 
 import '../../core/theme/app_colors.dart';
 import '../../core/utils/user_feedback.dart';
+import '../../data/models/trip_model.dart';
 import '../../data/models/vehicle_post_model.dart';
 import '../../providers/vehicle_provider.dart';
 import '../../providers/vehicle_type_provider.dart';
 import '../../services/vehicle_post_service.dart';
 import '../../widgets/searchable_vehicle_type_picker.dart';
+import '../location_picker_screen.dart';
 import 'route_rate_editor.dart';
 
 class EditVehiclePostScreen extends StatefulWidget {
@@ -30,6 +32,7 @@ class _EditVehiclePostScreenState extends State<EditVehiclePostScreen> {
 
   final _formKey = GlobalKey<FormState>();
   final _originCtrl = TextEditingController();
+  TripLocation? _originLocation;
   final _service = VehiclePostService();
 
   String? _vehicleType;
@@ -71,6 +74,7 @@ class _EditVehiclePostScreenState extends State<EditVehiclePostScreen> {
 
     _vehicleType = p.vehicleType;
     _originCtrl.text = p.origin;
+    _originLocation = p.originLocation;
     _availableVehicles = (p.quantity ?? 1).clamp(1, 9999);
     _acceptsOtherDestinations = p.acceptsOtherDestinations;
 
@@ -78,6 +82,7 @@ class _EditVehiclePostScreenState extends State<EditVehiclePostScreen> {
       _routes.add(
         RouteDraft(
           destination: r.destination,
+          destinationLocation: r.destinationLocation,
           exportRate: r.exportRate,
           importRate: r.importRate,
         ),
@@ -88,7 +93,11 @@ class _EditVehiclePostScreenState extends State<EditVehiclePostScreen> {
       final legacyDest = (p.destination ?? '').trim();
       if (legacyDest.isNotEmpty) {
         _routes.add(
-          RouteDraft(destination: legacyDest, exportRate: p.pricePerVehicle),
+          RouteDraft(
+            destination: legacyDest,
+            destinationLocation: p.destinationLocation,
+            exportRate: p.pricePerVehicle,
+          ),
         );
       }
     }
@@ -165,8 +174,42 @@ class _EditVehiclePostScreenState extends State<EditVehiclePostScreen> {
     });
   }
 
+  bool _hasOriginCoordinates() {
+    final loc = _originLocation;
+    if (loc == null) return false;
+    final lat = loc.coordinates.latitude;
+    final lng = loc.coordinates.longitude;
+    return !(lat == 0 && lng == 0);
+  }
+
+  Future<void> _pickOriginLocation() async {
+    final result = await Navigator.push<TripLocation>(
+      context,
+      MaterialPageRoute(
+        builder: (_) => LocationPickerScreen(
+          isPickup: true,
+          appBarTitle: 'Current Location',
+          initialQuery:
+              _originCtrl.text.trim().isEmpty ? null : _originCtrl.text.trim(),
+        ),
+      ),
+    );
+    if (result == null || !mounted) return;
+    setState(() {
+      _originLocation = result;
+      _originCtrl.text = result.address ?? '';
+    });
+  }
+
   Future<void> _submit() async {
     if (!_formKey.currentState!.validate()) return;
+
+    if (_originCtrl.text.trim().isEmpty || !_hasOriginCoordinates()) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(content: Text('Pick your current location on the map')),
+      );
+      return;
+    }
 
     if (_vehicleType == null || _vehicleType!.isEmpty) {
       ScaffoldMessenger.of(context).showSnackBar(
@@ -200,6 +243,16 @@ class _EditVehiclePostScreenState extends State<EditVehiclePostScreen> {
       return;
     }
 
+    if (_routes.isNotEmpty &&
+        !_routes.every((r) => r.hasDestinationCoordinates)) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(
+          content: Text('Each route needs a map-picked destination'),
+        ),
+      );
+      return;
+    }
+
     final fleetCount = _selectedFleetVehicleIds.length;
     if (fleetCount > _availableVehicles) {
       ScaffoldMessenger.of(context).showSnackBar(
@@ -216,6 +269,7 @@ class _EditVehiclePostScreenState extends State<EditVehiclePostScreen> {
         .map(
           (r) => MarketplaceRouteRate(
             destination: r.destination,
+            destinationLocation: r.destinationLocation,
             exportRate: r.exportRate,
             importRate: r.importRate,
           ),
@@ -228,6 +282,7 @@ class _EditVehiclePostScreenState extends State<EditVehiclePostScreen> {
         widget.postId,
         vehicleType: _vehicleType!,
         originAddress: _originCtrl.text.trim(),
+        originLocation: _originLocation,
         availableFrom: _availableFrom,
         availableTo: _useEndDate ? to : null,
         durationDays: _useEndDate ? null : durationDays,
@@ -299,16 +354,35 @@ class _EditVehiclePostScreenState extends State<EditVehiclePostScreen> {
               const SizedBox(height: 8),
               _availableVehiclesStepper(context),
               const SizedBox(height: 16),
-              TextFormField(
-                controller: _originCtrl,
-                decoration: const InputDecoration(
-                  labelText: 'Current Location *',
-                  border: OutlineInputBorder(),
-                  prefixIcon: Icon(Icons.my_location_outlined),
+              Material(
+                color: Colors.transparent,
+                child: InkWell(
+                  onTap: _pickOriginLocation,
+                  borderRadius: BorderRadius.circular(4),
+                  child: InputDecorator(
+                    decoration: InputDecoration(
+                      labelText: 'Current Location *',
+                      hintText: 'Tap to pick on map',
+                      border: const OutlineInputBorder(),
+                      prefixIcon: const Icon(Icons.my_location_outlined),
+                      suffixIcon: const Icon(Icons.chevron_right),
+                      helperText: _hasOriginCoordinates()
+                          ? '${_originLocation!.coordinates.latitude.toStringAsFixed(5)}, '
+                              '${_originLocation!.coordinates.longitude.toStringAsFixed(5)}'
+                          : 'Search or drop a pin to set coordinates',
+                    ),
+                    child: Text(
+                      _originCtrl.text.trim().isEmpty
+                          ? 'Tap to pick on map'
+                          : _originCtrl.text.trim(),
+                      style: TextStyle(
+                        color: _originCtrl.text.trim().isEmpty
+                            ? AppColors.textMuted
+                            : AppColors.textPrimary,
+                      ),
+                    ),
+                  ),
                 ),
-                validator: (v) => (v == null || v.trim().isEmpty)
-                    ? 'Enter your current location'
-                    : null,
               ),
               const SizedBox(height: 16),
               OutlinedButton.icon(

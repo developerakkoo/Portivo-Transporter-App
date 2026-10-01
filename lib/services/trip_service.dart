@@ -3,6 +3,7 @@ import 'package:flutter/foundation.dart';
 import '../core/config/api_config.dart';
 import '../core/utils/json_parser.dart';
 import '../data/models/trip_model.dart';
+import '../data/models/trip_group.dart';
 import 'api_service.dart';
 
 /// Trip API client. Status transitions (source of truth in repo):
@@ -275,6 +276,53 @@ class TripService {
     }
   }
 
+  /// Create a "trip with multiple routes": each route becomes its own Trip,
+  /// all linked by a shared tripGroupId. Returns the created trips.
+  ///
+  /// POST /api/trips/batch → `{ tripGroupId, trips: [...] }`
+  Future<List<TripModel>> createTripBatch(Map<String, dynamic> payload) async {
+    try {
+      final response = await _api.post(
+        ApiConfig.tripsBatch,
+        data: payload,
+      );
+
+      if (response.data['success'] == true) {
+        final data = response.data['data'];
+        if (data is Map && data['trips'] is List) {
+          return _parseTripsList(data['trips'] as List);
+        }
+      }
+      return [];
+    } catch (e) {
+      rethrow;
+    }
+  }
+
+  /// Fetch an aggregated trip group (all vehicle-trips sharing [groupId], or a
+  /// single legacy trip whose id == [groupId]) for the group-detail screen.
+  Future<TripGroup?> getTripGroup(String groupId) async {
+    try {
+      final response = await _api.get(ApiConfig.tripGroup(groupId));
+
+      if (response.data['success'] == true) {
+        final data = response.data['data'];
+        if (data is Map && data['trips'] is List) {
+          final trips = _parseTripsList(data['trips'] as List);
+          if (trips.isEmpty) return null;
+          final resolvedGroupId =
+              (data['group'] is Map ? data['group']['tripGroupId'] : null)
+                      ?.toString() ??
+                  groupId;
+          return TripGroup.fromTrips(resolvedGroupId, trips);
+        }
+      }
+      return null;
+    } catch (e) {
+      rethrow;
+    }
+  }
+
   Future<TripModel?> updateTrip(String id, Map<String, dynamic> tripData) async {
     try {
       final response = await _api.put(
@@ -424,6 +472,38 @@ class TripService {
         ApiConfig.tripsCustomerAvailable,
         queryParameters: queryParams,
       );
+
+      if (response.data['success'] == true) {
+        final data = response.data['data'];
+        List<dynamic> tripsData = [];
+
+        if (data is List) {
+          tripsData = data;
+        } else if (data is Map && data['trips'] != null) {
+          final trips = data['trips'];
+          if (trips is List) {
+            tripsData = trips;
+          }
+        }
+
+        if (tripsData.isNotEmpty) {
+          return JsonParser.extractList<TripModel>(
+            tripsData,
+            (json) => TripModel.fromJson(json),
+          );
+        }
+      }
+      return [];
+    } catch (e) {
+      rethrow;
+    }
+  }
+
+  /// Awarded inquiry/booking trips where the caller is the executor and the
+  /// trip is PLANNED (Ready to Start). Backed by GET /trips/marketplace-awarded.
+  Future<List<TripModel>> getMarketplaceAwardedTrips() async {
+    try {
+      final response = await _api.get(ApiConfig.tripsMarketplaceAwarded);
 
       if (response.data['success'] == true) {
         final data = response.data['data'];

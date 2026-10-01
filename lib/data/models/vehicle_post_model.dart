@@ -5,16 +5,26 @@ import 'trip_model.dart';
 class MarketplaceRouteRate {
   const MarketplaceRouteRate({
     required this.destination,
+    this.destinationLocation,
     this.exportRate,
     this.importRate,
   });
 
   final String destination;
+  final TripLocation? destinationLocation;
   final num? exportRate;
   final num? importRate;
 
   bool get exportNegotiable => exportRate == null;
   bool get importNegotiable => importRate == null;
+
+  bool get hasDestinationCoordinates {
+    final loc = destinationLocation;
+    if (loc == null) return false;
+    final lat = loc.coordinates.latitude;
+    final lng = loc.coordinates.longitude;
+    return !(lat == 0 && lng == 0);
+  }
 
   static String _destLabel(dynamic v) {
     if (v == null) return '';
@@ -25,6 +35,15 @@ class MarketplaceRouteRate {
     return '';
   }
 
+  static TripLocation? _destLocation(dynamic v) {
+    if (v is! Map) return null;
+    try {
+      return TripLocation.fromJson(Map<String, dynamic>.from(v));
+    } catch (_) {
+      return null;
+    }
+  }
+
   static num? _rate(dynamic v) => v is num ? v : num.tryParse('$v');
 
   static MarketplaceRouteRate? fromJson(Map<String, dynamic>? json) {
@@ -33,6 +52,7 @@ class MarketplaceRouteRate {
     if (dest.isEmpty) return null;
     return MarketplaceRouteRate(
       destination: dest,
+      destinationLocation: _destLocation(json['destination']),
       exportRate: json['exportRate'] == null ? null : _rate(json['exportRate']),
       importRate: json['importRate'] == null ? null : _rate(json['importRate']),
     );
@@ -169,11 +189,35 @@ class VehiclePostModel {
     return s == 'draft';
   }
 
-  /// Seller can edit or attach vehicles (`draft` or `active`).
+  /// Seller paused the listing (hidden from marketplace until resumed).
+  bool get isPaused {
+    final s = status?.toLowerCase().trim();
+    return s == 'paused';
+  }
+
+  /// Inventory exhausted: explicit `fulfilled` status, or no bookable slots left
+  /// on an otherwise-live listing.
+  bool get isFullyBooked {
+    final s = status?.toLowerCase().trim();
+    if (s == 'fulfilled') return true;
+    return slotsLeft != null && slotsLeft! <= 0 && !isDraftListing;
+  }
+
+  /// Listing expired: explicit `expired` status, or availableTo in the past.
+  bool get isExpired {
+    final s = status?.toLowerCase().trim();
+    if (s == 'expired') return true;
+    if (availableTo != null && availableTo!.isBefore(DateTime.now())) {
+      return s == null || s.isEmpty || s == 'active' || s == 'paused' || s == 'draft';
+    }
+    return false;
+  }
+
+  /// Seller can edit or attach vehicles (`draft`, `active` or `paused`).
   bool get isEditableMarketplacePost {
     final s = status?.toLowerCase().trim();
     if (s == null || s.isEmpty) return true;
-    return s == 'active' || s == 'draft';
+    return s == 'active' || s == 'draft' || s == 'paused';
   }
 
   /// Same as [isEditableMarketplacePost] (used across marketplace screens).

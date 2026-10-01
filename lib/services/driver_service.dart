@@ -94,6 +94,9 @@ class DriverService {
     required String mobile,
     required String name,
     String? status,
+    String? alternateMobile,
+    String? licenseNumber,
+    String? licenseValidTill,
   }) async {
     try {
       if (kDebugMode) {
@@ -106,6 +109,12 @@ class DriverService {
           'mobile': mobile,
           'name': name,
           if (status != null) 'status': status,
+          if (alternateMobile != null && alternateMobile.trim().isNotEmpty)
+            'alternateMobile': alternateMobile.trim(),
+          if (licenseNumber != null && licenseNumber.trim().isNotEmpty)
+            'licenseNumber': licenseNumber.trim(),
+          if (licenseValidTill != null && licenseValidTill.trim().isNotEmpty)
+            'licenseValidTill': licenseValidTill.trim(),
         },
       );
 
@@ -132,6 +141,9 @@ class DriverService {
     required String id,
     String? name,
     String? status,
+    String? alternateMobile,
+    String? licenseNumber,
+    String? licenseValidTill,
   }) async {
     try {
       if (kDebugMode) {
@@ -141,6 +153,18 @@ class DriverService {
       final updateData = <String, dynamic>{};
       if (name != null) updateData['name'] = name;
       if (status != null) updateData['status'] = status;
+      if (alternateMobile != null) {
+        updateData['alternateMobile'] =
+            alternateMobile.trim().isEmpty ? null : alternateMobile.trim();
+      }
+      if (licenseNumber != null) {
+        updateData['licenseNumber'] =
+            licenseNumber.trim().isEmpty ? null : licenseNumber.trim();
+      }
+      if (licenseValidTill != null) {
+        updateData['licenseValidTill'] =
+            licenseValidTill.trim().isEmpty ? null : licenseValidTill.trim();
+      }
 
       final response = await _api.put(
         ApiConfig.driverById(id),

@@ -178,6 +178,7 @@ class ErrorUtils {
     if (lower.contains('driver with this mobile number already exists') ||
         (lower.contains('driver') &&
             lower.contains('already') &&
+            lower.contains('mobile') &&
             statusCode == 409)) {
       return AppCopy.errorDriverAlreadyRegistered;
     }

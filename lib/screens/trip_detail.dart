@@ -19,6 +19,11 @@ import '../data/models/vehicle_model.dart';
 import '../data/models/driver_model.dart';
 import '../providers/auth_provider.dart';
 import '../providers/trip_provider.dart';
+import '../providers/navigation_state_provider.dart';
+import '../providers/marketplace_payment_provider.dart';
+import '../widgets/marketplace_payment_card.dart';
+import 'marketplace/marketplace_chat_screen.dart';
+import 'marketplace/quote_chat_screen.dart';
 import '../providers/vehicle_provider.dart';
 import '../providers/driver_provider.dart';
 import '../models/trip_map_live_data.dart';
@@ -72,6 +77,24 @@ class _TripDetailScreenState extends State<TripDetailScreen> {
       _lastMilestoneCount = t.milestones.length;
       _loadTimeline(id);
     }
+    if (t.isMarketplaceBookingTrip) {
+      context.read<MarketplacePaymentProvider>().loadStatus(id, silent: true);
+    }
+  }
+
+  void _goHome() {
+    context.read<NavigationStateProvider>().requestOpenHomeTab();
+    Navigator.of(context).popUntil((route) => route.isFirst);
+  }
+
+  List<Widget> _homeActions() {
+    return [
+      IconButton(
+        icon: const Icon(Icons.home_outlined),
+        onPressed: _goHome,
+        tooltip: 'Home',
+      ),
+    ];
   }
 
   @override
@@ -489,6 +512,9 @@ class _TripDetailScreenState extends State<TripDetailScreen> {
         _loadTimeline(tripId);
         _loadRouteIfActive(trip);
         unawaited(_loadDriverTrail(tripId, trip.status));
+        if (trip.isMarketplaceBookingTrip) {
+          context.read<MarketplacePaymentProvider>().loadStatus(tripId);
+        }
       }
     } catch (e) {
       if (mounted) {
@@ -615,6 +641,7 @@ class _TripDetailScreenState extends State<TripDetailScreen> {
         backgroundColor: AppColors.background,
         appBar: AppBar(
           title: const Text('Trip Details'),
+          actions: _homeActions(),
         ),
         body: const Center(child: CircularProgressIndicator()),
       );
@@ -625,6 +652,7 @@ class _TripDetailScreenState extends State<TripDetailScreen> {
         backgroundColor: AppColors.background,
         appBar: AppBar(
           title: const Text('Trip Details'),
+          actions: _homeActions(),
         ),
         body: Center(
           child: Column(
@@ -687,6 +715,11 @@ class _TripDetailScreenState extends State<TripDetailScreen> {
           appBar: AppBar(
             title: const Text('Trip Details'),
             actions: [
+              IconButton(
+                icon: const Icon(Icons.home_outlined),
+                onPressed: _goHome,
+                tooltip: 'Home',
+              ),
               IconButton(
                 icon: const Icon(Icons.refresh),
                 onPressed: _loadTrip,
@@ -883,7 +916,22 @@ class _TripDetailScreenState extends State<TripDetailScreen> {
             _buildMarketplaceBanner(trip, textTheme),
             const SizedBox(height: 10),
           ],
+          if (trip.isMarketplaceBookingTrip) ...[
+            MarketplacePaymentCard(
+              trip: trip,
+              onPaymentComplete: () => _loadTrip(),
+            ),
+            const SizedBox(height: 10),
+          ],
+          if (trip.canCollectExtraCharges) ...[
+            _buildCollectExtraChargesCard(trip, textTheme),
+            const SizedBox(height: 10),
+          ],
           _buildCompactInfoCard(trip, textTheme),
+          const SizedBox(height: 10),
+          _buildFleetSummaryCard(trip, textTheme),
+          const SizedBox(height: 10),
+          _buildAdvanceBadge(trip, textTheme),
           const SizedBox(height: 10),
           if (trip.pickupLocation != null || trip.dropLocation != null) ...[
             _buildLocationsCard(trip, textTheme),
@@ -1036,6 +1084,59 @@ class _TripDetailScreenState extends State<TripDetailScreen> {
     );
   }
 
+  Widget _buildFleetSummaryCard(TripModel trip, TextTheme textTheme) {
+    final assignments = trip.assignments ?? const <TripAssignment>[];
+    final vehicleCount = assignments.isEmpty ? 1 : assignments.length;
+    final driverCount = assignments.isEmpty
+        ? (trip.driverId != null ? 1 : 0)
+        : assignments.map((a) => a.driverId).where((id) => id.isNotEmpty).toSet().length;
+    final assignedContainers = assignments.where((a) => a.containerNumber.trim().isNotEmpty).length;
+    final pendingContainers = vehicleCount - assignedContainers;
+    final containerLabel = assignments.isEmpty
+        ? ((trip.containerNumber ?? '').isEmpty ? 'Container not assigned' : '1 container assigned')
+        : '$assignedContainers Containers Assigned • $pendingContainers Pending';
+    return Container(
+      padding: const EdgeInsets.all(12),
+      decoration: BoxDecoration(
+        color: AppColors.offWhite,
+        borderRadius: BorderRadius.circular(12),
+      ),
+      child: Text(
+        '$vehicleCount Vehicles | $driverCount Drivers | $containerLabel',
+        style: textTheme.bodyMedium?.copyWith(fontWeight: FontWeight.w600),
+      ),
+    );
+  }
+
+  Widget _buildAdvanceBadge(TripModel trip, TextTheme textTheme) {
+    final amounts = (trip.assignments ?? const <TripAssignment>[])
+        .map((a) => a.advanceAmount ?? 0)
+        .toList();
+    final total = amounts.isEmpty ? 0.0 : amounts.fold<double>(0, (p, n) => p + n);
+    if (total <= 0) return const SizedBox.shrink();
+    return Container(
+      padding: const EdgeInsets.all(12),
+      decoration: BoxDecoration(
+        border: Border.all(color: AppColors.dividerGrey),
+        borderRadius: BorderRadius.circular(12),
+      ),
+      child: Row(
+        children: [
+          Expanded(
+            child: Text(
+              'Advance ₹${total.toStringAsFixed(0)}',
+              style: textTheme.bodyMedium?.copyWith(fontWeight: FontWeight.w600),
+            ),
+          ),
+          Text(
+            'Paid / Partially Paid',
+            style: textTheme.labelSmall?.copyWith(color: AppColors.success),
+          ),
+        ],
+      ),
+    );
+  }
+
   Widget _buildShareCard(TripModel trip, TextTheme textTheme) {
     return Container(
       decoration: BoxDecoration(
@@ -1165,8 +1266,7 @@ class _TripDetailScreenState extends State<TripDetailScreen> {
             child: Column(
               crossAxisAlignment: CrossAxisAlignment.stretch,
               children: [
-                if (trip.status == AppConstants.tripStatusPodPending &&
-                    trip.pod?.photo != null &&
+                if (trip.pod?.photo != null &&
                     (trip.pod!.photo?.isNotEmpty ?? false)) ...[
                   _buildPODSection(trip, textTheme),
                   const SizedBox(height: 12),
@@ -1463,9 +1563,13 @@ class _TripDetailScreenState extends State<TripDetailScreen> {
             ),
             const SizedBox(height: 12),
           ],
+          if (trip.canCollectExtraCharges) ...[
+            _buildCollectExtraChargesCard(trip, textTheme),
+            const SizedBox(height: 12),
+          ],
           if (hasActions) ...[
             _buildActionButtons(trip, textTheme),
-          ] else
+          ] else if (!trip.canCollectExtraCharges)
             Container(
               padding: const EdgeInsets.all(20),
               decoration: BoxDecoration(
@@ -1617,18 +1721,27 @@ class _TripDetailScreenState extends State<TripDetailScreen> {
   }
 
   List<String> _getTimelinePhotos(Map<String, dynamic> item) {
-    final photosRaw = item['photos'];
-    if (photosRaw is List && photosRaw.isNotEmpty) {
-      return photosRaw
-          .map((e) => e.toString().trim())
-          .where((s) => s.isNotEmpty)
-          .toList();
+    final urls = <String>[];
+    void add(dynamic value) {
+      if (value == null) return;
+      if (value is List) {
+        for (final e in value) {
+          add(e);
+        }
+        return;
+      }
+      if (value is Map) {
+        add(value['url'] ?? value['path'] ?? value['photo']);
+        return;
+      }
+      final text = value.toString().trim();
+      if (text.isNotEmpty && !urls.contains(text)) urls.add(text);
     }
-    final photo = item['photo']?.toString();
-    if (photo != null && photo.trim().isNotEmpty) {
-      return [photo.trim()];
-    }
-    return [];
+
+    add(item['photos']);
+    add(item['photo']);
+    add(item['images']);
+    return urls;
   }
 
   String _getTimelineImageUrl(String path) {
@@ -1990,6 +2103,85 @@ class _TripDetailScreenState extends State<TripDetailScreen> {
         ),
       ],
     );
+  }
+
+  Widget _buildCollectExtraChargesCard(TripModel trip, TextTheme textTheme) {
+    return Container(
+      padding: const EdgeInsets.all(12),
+      decoration: BoxDecoration(
+        color: AppColors.offWhite,
+        borderRadius: BorderRadius.circular(12),
+        border: Border.all(color: AppColors.dividerGrey),
+      ),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.stretch,
+        children: [
+          Text(
+            'Extra charges',
+            style: textTheme.titleSmall?.copyWith(fontWeight: FontWeight.w700),
+          ),
+          const SizedBox(height: 4),
+          Text(
+            'Request an extra payment from the other transporter in chat.',
+            style: textTheme.bodySmall?.copyWith(color: AppColors.textSecondary),
+          ),
+          const SizedBox(height: 10),
+          SizedBox(
+            height: 44,
+            child: OutlinedButton.icon(
+              onPressed: () => _openCollectExtraChargesChat(trip),
+              icon: const Icon(Icons.payments_outlined),
+              label: const Text('Collect extra charges'),
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+
+  Future<void> _openCollectExtraChargesChat(TripModel trip) async {
+    final auth = context.read<AuthProvider>().user;
+    final selfId = auth?.transporterId ?? auth?.id;
+    final counterparty = trip.extraChargeCounterpartyId(selfId);
+    final referenceId = trip.tripId.isNotEmpty ? trip.tripId : trip.id;
+    final label = trip.customerName ?? trip.transporterName;
+
+    if (trip.bookingId != null && trip.bookingId!.isNotEmpty) {
+      await Navigator.push<void>(
+        context,
+        MaterialPageRoute<void>(
+          builder: (_) => MarketplaceChatScreen(
+            bookingId: trip.bookingId!,
+            counterpartyLabel: label,
+            counterpartyTransporterId: counterparty,
+            openCollectPayment: true,
+            collectReferenceType: 'TRIP',
+            collectReferenceId: referenceId,
+          ),
+        ),
+      );
+      return;
+    }
+
+    if (trip.quoteId != null && trip.quoteId!.isNotEmpty) {
+      await Navigator.push<void>(
+        context,
+        MaterialPageRoute<void>(
+          builder: (_) => QuoteChatScreen(
+            quoteId: trip.quoteId!,
+            title: label,
+            counterpartyTransporterId: counterparty,
+            openCollectPayment: true,
+            collectReferenceType: 'TRIP',
+            collectReferenceId: referenceId,
+          ),
+        ),
+      );
+      return;
+    }
+
+    if (!mounted) return;
+    showUserErrorSnackBar(context, 'Chat is not available for this trip.');
   }
 
   Widget _buildActionButtons(TripModel trip, TextTheme textTheme) {

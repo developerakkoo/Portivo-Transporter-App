@@ -1,6 +1,7 @@
 import 'package:flutter/foundation.dart';
 import '../data/models/vehicle_model.dart';
 import '../data/models/trip_model.dart';
+import '../data/models/driver_already_assigned_exception.dart';
 import '../services/vehicle_service.dart';
 import '../utils/error_utils.dart';
 
@@ -75,18 +76,19 @@ class VehicleProvider with ChangeNotifier {
     }
   }
 
-  Future<VehicleModel?> createVehicle(Map<String, dynamic> vehicleData) async {
+  Future<VehicleCreateResult?> createVehicle(Map<String, dynamic> vehicleData) async {
     _isLoading = true;
     _error = null;
     notifyListeners();
 
     try {
-      final vehicle = await _vehicleService.createVehicle(vehicleData);
-      if (vehicle != null) {
-        _vehicles.insert(0, vehicle);
+      final created = await _vehicleService.createVehicle(vehicleData);
+      if (created != null) {
+        _vehicles.insert(0, created.vehicle);
       }
-      return vehicle;
+      return created;
     } catch (e) {
+      if (e is DriverAlreadyAssignedException) rethrow;
       _error = ErrorUtils.userMessage(e);
       if (kDebugMode) {
         print('VehicleProvider: Error creating vehicle: $e');
@@ -117,6 +119,7 @@ class VehicleProvider with ChangeNotifier {
       }
       return false;
     } catch (e) {
+      if (e is DriverAlreadyAssignedException) rethrow;
       _error = ErrorUtils.userMessage(e);
       if (kDebugMode) {
         print('VehicleProvider: Error updating vehicle: $e');

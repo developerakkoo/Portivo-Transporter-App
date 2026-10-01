@@ -1,3 +1,32 @@
+/// Response from POST /auth/send-otp (no tokens).
+class SendOtpResponse {
+  const SendOtpResponse({
+    required this.success,
+    required this.message,
+    this.mobile,
+    this.userType,
+    this.requestId,
+  });
+
+  final bool success;
+  final String message;
+  final String? mobile;
+  final String? userType;
+  final String? requestId;
+
+  factory SendOtpResponse.fromJson(Map<String, dynamic> json) {
+    final data = json['data'];
+    final map = data is Map ? Map<String, dynamic>.from(data) : <String, dynamic>{};
+    return SendOtpResponse(
+      success: json['success'] == true,
+      message: json['message']?.toString() ?? '',
+      mobile: map['mobile']?.toString(),
+      userType: map['userType']?.toString(),
+      requestId: map['requestId']?.toString(),
+    );
+  }
+}
+
 class AuthResponseModel {
   final bool success;
   final String message;
@@ -49,6 +78,9 @@ class UserModel {
   final List<String> permissions; // For company users
   final String? operatingCountry;
   final String? company;
+  final bool hasPinSet;
+  final String? kycStatus;
+  final bool isKycCompleted;
 
   UserModel({
     required this.id,
@@ -61,7 +93,15 @@ class UserModel {
     List<String>? permissions,
     this.operatingCountry,
     this.company,
+    this.hasPinSet = false,
+    this.kycStatus,
+    this.isKycCompleted = false,
   }) : permissions = permissions ?? [];
+
+  bool get isKycVerified {
+    final status = kycStatus?.toLowerCase();
+    return isKycCompleted || status == 'verified' || status == 'completed';
+  }
 
   factory UserModel.fromJson(Map<String, dynamic> json) {
     return UserModel(
@@ -77,6 +117,9 @@ class UserModel {
           : [],
       operatingCountry: json['operatingCountry']?.toString().toUpperCase(),
       company: json['company']?.toString(),
+      hasPinSet: json['hasPinSet'] == true,
+      kycStatus: json['kycStatus']?.toString(),
+      isKycCompleted: json['isKycCompleted'] == true,
     );
   }
 
@@ -91,6 +134,9 @@ class UserModel {
     List<String>? permissions,
     String? operatingCountry,
     String? company,
+    bool? hasPinSet,
+    String? kycStatus,
+    bool? isKycCompleted,
   }) {
     return UserModel(
       id: id ?? this.id,
@@ -103,6 +149,9 @@ class UserModel {
       permissions: permissions ?? this.permissions,
       operatingCountry: operatingCountry ?? this.operatingCountry,
       company: company ?? this.company,
+      hasPinSet: hasPinSet ?? this.hasPinSet,
+      kycStatus: kycStatus ?? this.kycStatus,
+      isKycCompleted: isKycCompleted ?? this.isKycCompleted,
     );
   }
 }

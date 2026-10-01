@@ -26,9 +26,9 @@ class _CompanyUsersScreenState extends State<CompanyUsersScreen> {
     final confirmed = await showDialog<bool>(
       context: context,
       builder: (context) => AlertDialog(
-        title: const Text('Delete User'),
+        title: const Text('Remove User'),
         content: Text(
-          'Are you sure you want to delete ${user.name}? This action cannot be undone.',
+          'Are you sure you want to remove ${user.name}? This action cannot be undone.',
         ),
         actions: [
           TextButton(
@@ -43,7 +43,7 @@ class _CompanyUsersScreenState extends State<CompanyUsersScreen> {
           TextButton(
             onPressed: () => Navigator.of(context).pop(true),
             child: Text(
-              'Delete',
+              'Remove',
               style: Theme.of(context).textTheme.bodyLarge?.copyWith(
                     color: AppColors.error,
                     fontWeight: FontWeight.w600,
@@ -85,9 +85,9 @@ class _CompanyUsersScreenState extends State<CompanyUsersScreen> {
       final confirmed = await showDialog<bool>(
         context: context,
         builder: (context) => AlertDialog(
-          title: const Text('Disable Access'),
+          title: const Text('Deactivate User'),
           content: Text(
-            'Are you sure you want to disable access for ${user.name}?',
+            'Are you sure you want to deactivate ${user.name}?',
           ),
           actions: [
             TextButton(
@@ -96,7 +96,7 @@ class _CompanyUsersScreenState extends State<CompanyUsersScreen> {
             ),
             TextButton(
               onPressed: () => Navigator.of(context).pop(true),
-              child: const Text('Disable'),
+              child: const Text('Deactivate'),
             ),
           ],
         ),
@@ -110,7 +110,9 @@ class _CompanyUsersScreenState extends State<CompanyUsersScreen> {
       if (success) {
         ScaffoldMessenger.of(context).showSnackBar(
           SnackBar(
-            content: Text('Access ${newAccess ? 'enabled' : 'disabled'} successfully'),
+            content: Text(
+              'User ${newAccess ? 'activated' : 'deactivated'} successfully',
+            ),
             backgroundColor: Colors.green,
           ),
         );
@@ -364,6 +366,18 @@ class _CompanyUsersScreenState extends State<CompanyUsersScreen> {
                                   arguments: {'user': user, 'mode': 'edit'})
                               .then((_) => context.read<CompanyUserProvider>().loadUsers(refresh: true));
                           break;
+                        case 'permissions':
+                          Navigator.of(context)
+                              .pushNamed('/add-user',
+                                  arguments: {'user': user, 'mode': 'permissions'})
+                              .then((_) => context.read<CompanyUserProvider>().loadUsers(refresh: true));
+                          break;
+                        case 'reset-pin':
+                          Navigator.of(context)
+                              .pushNamed('/add-user',
+                                  arguments: {'user': user, 'mode': 'set-pin'})
+                              .then((_) => context.read<CompanyUserProvider>().loadUsers(refresh: true));
+                          break;
                         case 'toggle':
                           _handleToggleAccess(user);
                           break;
@@ -375,15 +389,28 @@ class _CompanyUsersScreenState extends State<CompanyUsersScreen> {
                     itemBuilder: (context) => [
                       const PopupMenuItem(
                         value: 'edit',
-                        child: Text('Edit'),
+                        child: Text('Edit User'),
+                      ),
+                      const PopupMenuItem(
+                        value: 'permissions',
+                        child: Text('Manage Permissions'),
+                      ),
+                      PopupMenuItem(
+                        value: 'reset-pin',
+                        child: Text(user.hasPinSet() ? 'Reset PIN' : 'Set PIN'),
                       ),
                       PopupMenuItem(
                         value: 'toggle',
-                        child: Text(user.hasAccess ? 'Disable Access' : 'Enable Access'),
+                        child: Text(
+                          user.hasAccess ? 'Deactivate User' : 'Activate User',
+                        ),
                       ),
                       const PopupMenuItem(
                         value: 'delete',
-                        child: Text('Delete', style: TextStyle(color: AppColors.error)),
+                        child: Text(
+                          'Remove User',
+                          style: TextStyle(color: AppColors.error),
+                        ),
                       ),
                     ],
                   ),
@@ -423,7 +450,7 @@ class _CompanyUsersScreenState extends State<CompanyUsersScreen> {
                         user.hasPinSet() ? Icons.lock : Icons.lock_outline,
                         size: 18.0,
                       ),
-                      label: Text(user.hasPinSet() ? 'Change PIN' : 'Set PIN'),
+                      label: Text(user.hasPinSet() ? 'Reset PIN' : 'Set PIN'),
                       style: OutlinedButton.styleFrom(
                         side: const BorderSide(color: AppColors.primary),
                         shape: RoundedRectangleBorder(
@@ -435,10 +462,26 @@ class _CompanyUsersScreenState extends State<CompanyUsersScreen> {
                   const SizedBox(width: 8.0),
                   Switch(
                     value: user.hasAccess,
+                    thumbIcon: WidgetStateProperty.resolveWith<Icon?>(
+                      (states) {
+                        if (states.contains(WidgetState.selected)) {
+                          return const Icon(
+                            Icons.check,
+                            size: 16.0,
+                            color: AppColors.background,
+                          );
+                        }
+                        return const Icon(
+                          Icons.power_settings_new,
+                          size: 16.0,
+                          color: AppColors.textSecondary,
+                        );
+                      },
+                    ),
                     onChanged: (value) {
                       _handleToggleAccess(user);
                     },
-                    activeColor: AppColors.primary,
+                    activeThumbColor: AppColors.primary,
                   ),
                 ],
               ),

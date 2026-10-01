@@ -2,6 +2,8 @@ import 'package:dio/dio.dart';
 import 'package:flutter/foundation.dart';
 import '../core/config/api_config.dart';
 import '../data/models/vehicle_post_model.dart';
+import '../data/models/vehicle_post_activity_model.dart';
+import '../data/models/trip_model.dart';
 import 'api_service.dart';
 
 class VehiclePostSearchResult {
@@ -14,12 +16,48 @@ class VehiclePostSearchResult {
 class VehiclePostService {
   final ApiService _api = ApiService();
 
+  /// GeoJSON Point for vehicle posts. Prefers map coordinates when available.
+  static Map<String, dynamic> locationPayload(
+    TripLocation? location,
+    String fallbackAddress,
+  ) {
+    final fromLocation = location?.toVehiclePostLocationPayload();
+    if (fromLocation != null) return fromLocation;
+    return textOnlyLocation(fallbackAddress);
+  }
+
   /// GeoJSON Point body for vehicle posts without map coordinates ([vehiclePost.controller] `requireCoordinates: false`).
   static Map<String, dynamic> textOnlyLocation(String address) {
     return {
       'type': 'Point',
       'formattedAddress': address.trim(),
       'coordinates': <double>[],
+    };
+  }
+
+  static bool hasValidCoordinates(TripLocation? location) {
+    if (location == null) return false;
+    final lat = location.coordinates.latitude;
+    final lng = location.coordinates.longitude;
+    return !(lat == 0 && lng == 0);
+  }
+
+  static void assertRoutesHaveCoordinates(List<MarketplaceRouteRate> routes) {
+    for (var i = 0; i < routes.length; i++) {
+      if (!hasValidCoordinates(routes[i].destinationLocation)) {
+        throw Exception(
+          'Route ${i + 1}: pick destination on the map',
+        );
+      }
+    }
+  }
+
+  /// Serialize a route with per-direction rates for the API. Null rate => negotiable.
+  static Map<String, dynamic> _routePayload(MarketplaceRouteRate r) {
+    return {
+      'destination': locationPayload(r.destinationLocation, r.destination),
+      'exportRate': r.exportRate,
+      'importRate': r.importRate,
     };
   }
 
@@ -146,6 +184,39 @@ class VehiclePostService {
     }
   }
 
+  /// GET /api/vehicle-posts/:id/activity — listing activity timeline (owner).
+  Future<List<VehiclePostActivity>> fetchActivity(String id) async {
+    try {
+      final response = await _api.get(ApiConfig.vehiclePostActivity(id));
+      final body = response.data;
+      if (body is! Map || body['success'] != true) {
+        throw Exception(
+          body is Map ? body['message']?.toString() ?? 'Failed' : 'Failed',
+        );
+      }
+      final data = body['data'];
+      if (data is! Map) return [];
+      final rawList = data['activities'];
+      final out = <VehiclePostActivity>[];
+      if (rawList is List) {
+        for (final item in rawList) {
+          if (item is Map) {
+            final a = VehiclePostActivity.fromJson(
+              Map<String, dynamic>.from(item),
+            );
+            if (a != null) out.add(a);
+          }
+        }
+      }
+      return out;
+    } on DioException catch (e) {
+      if (kDebugMode) {
+        print('VehiclePostService.fetchActivity: $e');
+      }
+      throw Exception(_messageFromDio(e));
+    }
+  }
+
   /// DELETE /api/vehicle-posts/:id — cancel (owner)
   Future<VehiclePostModel> cancel(String id) async {
     try {
@@ -171,19 +242,46 @@ class VehiclePostService {
     }
   }
 
-  /// Serialize a route with per-direction rates for the API. Null rate => negotiable.
-  static Map<String, dynamic> _routePayload(MarketplaceRouteRate r) {
-    return {
-      'destination': textOnlyLocation(r.destination),
-      'exportRate': r.exportRate,
-      'importRate': r.importRate,
-    };
+  /// PUT /api/vehicle-posts/:id/pause — pause an active post (owner).
+  Future<VehiclePostModel> pause(String id) => _setPaused(id, pause: true);
+
+  /// PUT /api/vehicle-posts/:id/resume — resume a paused post (owner).
+  Future<VehiclePostModel> resume(String id) => _setPaused(id, pause: false);
+
+  Future<VehiclePostModel> _setPaused(String id, {required bool pause}) async {
+    final path =
+        pause ? ApiConfig.vehiclePostPause(id) : ApiConfig.vehiclePostResume(id);
+    try {
+      final response = await _api.put(path);
+      final body = response.data;
+      if (body is! Map || body['success'] != true) {
+        throw Exception(
+          body is Map
+              ? body['message']?.toString() ?? 'Request failed'
+              : 'Request failed',
+        );
+      }
+      final data = body['data'];
+      if (data is Map && data['post'] is Map) {
+        final post = VehiclePostModel.fromJson(
+          Map<String, dynamic>.from(data['post'] as Map),
+        );
+        if (post != null) return post;
+      }
+      return await fetchById(id);
+    } on DioException catch (e) {
+      if (kDebugMode) {
+        print('VehiclePostService.${pause ? 'pause' : 'resume'}: $e');
+      }
+      throw Exception(_messageFromDio(e));
+    }
   }
 
   /// POST /api/vehicle-posts — create availability post.
   Future<VehiclePostModel?> create({
     required String vehicleType,
     required String originAddress,
+    TripLocation? originLocation,
     List<String> destinationAddresses = const [],
     List<int> destinationQuantities = const [],
     required DateTime availableFrom,
@@ -200,6 +298,9 @@ class VehiclePostService {
     if (originTrim.isEmpty) {
       throw Exception('Origin is required');
     }
+    if (routes.isNotEmpty) {
+      assertRoutesHaveCoordinates(routes);
+    }
     final destObjects = destinationAddresses
         .map((s) => s.trim())
         .where((s) => s.isNotEmpty)
@@ -207,7 +308,7 @@ class VehiclePostService {
         .toList();
     final payload = <String, dynamic>{
       'vehicleType': vehicleType,
-      'origin': textOnlyLocation(originTrim),
+      'origin': locationPayload(originLocation, originTrim),
       'availableFrom': availableFrom.toUtc().toIso8601String(),
       if (availableTo != null)
         'availableTo': availableTo.toUtc().toIso8601String(),
@@ -256,6 +357,7 @@ class VehiclePostService {
     String id, {
     required String vehicleType,
     required String originAddress,
+    TripLocation? originLocation,
     List<String> destinationAddresses = const [],
     List<int> destinationQuantities = const [],
     required DateTime availableFrom,
@@ -272,6 +374,9 @@ class VehiclePostService {
     if (originTrim.isEmpty) {
       throw Exception('Origin is required');
     }
+    if (routes != null && routes.isNotEmpty) {
+      assertRoutesHaveCoordinates(routes);
+    }
     final destObjects = destinationAddresses
         .map((s) => s.trim())
         .where((s) => s.isNotEmpty)
@@ -279,7 +384,7 @@ class VehiclePostService {
         .toList();
     final payload = <String, dynamic>{
       'vehicleType': vehicleType,
-      'origin': textOnlyLocation(originTrim),
+      'origin': locationPayload(originLocation, originTrim),
       'availableFrom': availableFrom.toUtc().toIso8601String(),
       if (availableTo != null)
         'availableTo': availableTo.toUtc().toIso8601String(),

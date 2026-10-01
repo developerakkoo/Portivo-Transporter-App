@@ -16,6 +16,8 @@ class ApiConfig {
   // API Endpoints
   static const String register = '/auth/register';
   static const String sendOTP = '/auth/send-otp';
+  static const String verifyOTP = '/auth/verify-otp';
+  static const String resendOTP = '/auth/resend-otp';
   static const String pinLogin = '/auth/pin-login';
   static const String companyUserLogin = '/auth/company-user-login';
   static const String refreshToken = '/auth/refresh';
@@ -24,6 +26,8 @@ class ApiConfig {
   static const String transporterProfile = '/transporters/profile';
   static const String transporterSetPin = '/transporters/set-pin';
   static const String transporterDashboard = '/transporters/dashboard';
+  static const String transporterKyc = '/transporters/kyc';
+  static const String transporterKycUpload = '/transporters/kyc/upload';
 
   /// Transporter / company-user support tickets (REST + Socket `support:*`).
   static const String supportTickets = '/transporters/support/tickets';
@@ -58,6 +62,9 @@ class ApiConfig {
   static const String vehiclePostsMine = '/vehicle-posts/mine';
   static String vehiclePostById(String id) => '/vehicle-posts/$id';
   static String vehiclePostVehicles(String postId) => '/vehicle-posts/$postId/vehicles';
+  static String vehiclePostPause(String id) => '/vehicle-posts/$id/pause';
+  static String vehiclePostResume(String id) => '/vehicle-posts/$id/resume';
+  static String vehiclePostActivity(String id) => '/vehicle-posts/$id/activity';
 
   /// T2T vehicle booking / marketplace chat
   static const String vehicleBookings = '/vehicle-bookings';
@@ -70,6 +77,7 @@ class ApiConfig {
   static String vehicleBookingDeclineProposal(String id) =>
       '/vehicle-bookings/$id/decline-proposal';
   static String vehicleBookingAccept(String id) => '/vehicle-bookings/$id/accept';
+  static String vehicleBookingSubmit(String id) => '/vehicle-bookings/$id/submit';
   static String vehicleBookingReject(String id) => '/vehicle-bookings/$id/reject';
   static String vehicleBookingHideFromInbox(String id) =>
       '/vehicle-bookings/$id/hide-from-inbox';
@@ -79,9 +87,45 @@ class ApiConfig {
   static String messagesBooking(String bookingId) => '/messages/booking/$bookingId';
   static String messagesBookingReadAll(String bookingId) =>
       '/messages/booking/$bookingId/read-all';
+
+  /// Reverse marketplace: Post Inquiry (Requirement) + Quote flow
+  static const String requirements = '/requirements';
+  static const String requirementsMine = '/requirements/mine';
+  static const String requirementsIncoming = '/requirements/incoming';
+  static String requirementById(String id) => '/requirements/$id';
+  static String requirementCancel(String id) => '/requirements/$id/cancel';
+  static String requirementQuotes(String id) => '/requirements/$id/quotes';
+  static String quoteSelect(String id) => '/quotes/$id/select';
+  static String quoteCounter(String id) => '/quotes/$id/counter';
+  static String quoteById(String id) => '/quotes/$id';
+  /// Quote-scoped chat ("Chat with Requester").
+  static String quoteMessages(String quoteId) => '/quotes/$quoteId/messages';
+
+  /// FCM device token registration
+  static const String devicesRegister = '/devices/register';
+  static const String devicesToken = '/devices/token';
+
+  /// Marketplace awarded trips (ready to start)
+  static const String tripsMarketplaceAwarded = '/trips/marketplace-awarded';
+
+  /// Marketplace trip payments (Razorpay — buyer pays after milestone 1)
+  static const String marketplacePayments = '/marketplace-payments';
+  static String marketplacePaymentStatus(String tripId) =>
+      '/marketplace-payments/trips/$tripId/razorpay/status';
+  static String marketplacePaymentInitiate(String tripId) =>
+      '/marketplace-payments/trips/$tripId/razorpay/initiate';
+
+  /// Transporter extra-charge Payment Links (Razorpay hosted link + RazorpayX payout).
+  static const String razorpayPaymentLinks = '/razorpay-payment-links';
+  static String razorpayPaymentLinkById(String id) =>
+      '/razorpay-payment-links/$id';
+  static String razorpayPaymentLinkCancel(String id) =>
+      '/razorpay-payment-links/$id/cancel';
   
   // Trip endpoints
   static const String trips = '/trips';
+  static const String tripsBatch = '/trips/batch';
+  static String tripGroup(String groupId) => '/trips/group/$groupId';
   static String tripById(String id) => '/trips/$id';
   static String updateTrip(String id) => '/trips/$id';
   static String tripCancel(String id) => '/trips/$id/cancel';
@@ -107,6 +151,12 @@ class ApiConfig {
   static String sharedTrip(String token) => '/trips/shared/$token';
   static const String tripDrafts = '/trips/drafts';
   static String tripDraftById(String id) => '/trips/drafts/$id';
+
+  // Driver advance payment (transporter pays driver)
+  static const String tripAdvancePayments = '/trips/advance/payments';
+  static String tripAdvancePay(String tripId) => '/trips/$tripId/advance/pay';
+  static String tripAdvanceVerify(String tripId) =>
+      '/trips/$tripId/advance/verify';
 
   // Transporter customer directory
   static const String transporterCustomers = '/transporter-customers';
@@ -144,6 +194,7 @@ class ApiConfig {
   // Payment session endpoints (generic payment screen flow)
   static const String paymentsSessions = '/payments/sessions';
   static String paymentSessionById(String id) => '/payments/sessions/$id';
+  static const String transporterPaymentHistory = '/payments/transporter/history';
 
   /// PayU webhook path (surl/furl). Used both to build the reachable
   /// success/failure override URL (`${baseUrl}$payuWebhookPath`) and to match
@@ -156,6 +207,10 @@ class ApiConfig {
   static const String walletTransactions = '/wallets/transactions';
   static const String walletTransfer = '/wallets/transfer';
   static const String walletBanks = '/wallets/banks';
+
+  // Payout endpoints. POST/GET/DELETE register a Razorpay contact + fund
+  // account; the backend stores razorpayContactId / razorpayFundAccountId.
+  static const String payoutBeneficiary = '/payouts/beneficiary';
   
   /// Google Maps **Web** key for Directions API. Override via `--dart-define=GOOGLE_MAPS_DIRECTIONS_KEY=...`
   static const String googleMapsDirectionsKey = String.fromEnvironment(

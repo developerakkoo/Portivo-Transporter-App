@@ -115,6 +115,8 @@ class TripAssignment {
   final String driverId;
   final String? vehicleNumber;
   final String? driverName;
+  final String? driverMobile;
+  final double? advanceAmount;
 
   TripAssignment({
     required this.containerNumber,
@@ -122,6 +124,8 @@ class TripAssignment {
     required this.driverId,
     this.vehicleNumber,
     this.driverName,
+    this.driverMobile,
+    this.advanceAmount,
   });
 
   factory TripAssignment.fromJson(Map<String, dynamic> json) {
@@ -137,8 +141,50 @@ class TripAssignment {
       vehicleId: extractId(v) ?? '',
       driverId: extractId(d) ?? '',
       vehicleNumber: v is Map ? v['vehicleNumber']?.toString() : null,
-      driverName: d is Map ? d['name']?.toString() : null,
+      driverName: d is Map ? d['name']?.toString() : json['driverName']?.toString(),
+      driverMobile: d is Map ? d['mobile']?.toString() : json['driverMobile']?.toString(),
+      advanceAmount: json['advanceAmount'] is num
+          ? (json['advanceAmount'] as num).toDouble()
+          : double.tryParse(json['advanceAmount']?.toString() ?? ''),
     );
+  }
+}
+
+/// Persisted live tracking metrics (ETA / remaining distance / movement stage),
+/// updated by the server on each `driver:location:updated`. Lets grouped list &
+/// vehicle rows show ETA + status without running a tracking controller each.
+class TripTracking {
+  final int? etaSeconds;
+  final double? distanceRemainingMeters;
+  final String? movementStage;
+  final DateTime? etaUpdatedAt;
+
+  TripTracking({
+    this.etaSeconds,
+    this.distanceRemainingMeters,
+    this.movementStage,
+    this.etaUpdatedAt,
+  });
+
+  bool get hasData =>
+      etaSeconds != null ||
+      distanceRemainingMeters != null ||
+      (movementStage != null && movementStage!.isNotEmpty);
+
+  static TripTracking? fromJson(dynamic value) {
+    if (value == null || value is! Map) return null;
+    final m = Map<String, dynamic>.from(value);
+    final t = TripTracking(
+      etaSeconds: m['etaSeconds'] is num
+          ? (m['etaSeconds'] as num).toInt()
+          : int.tryParse(m['etaSeconds']?.toString() ?? ''),
+      distanceRemainingMeters: m['distanceRemainingMeters'] is num
+          ? (m['distanceRemainingMeters'] as num).toDouble()
+          : double.tryParse(m['distanceRemainingMeters']?.toString() ?? ''),
+      movementStage: m['movementStage']?.toString(),
+      etaUpdatedAt: JsonParser.extractDateTime(m['etaUpdatedAt']),
+    );
+    return t.hasData || t.etaUpdatedAt != null ? t : null;
   }
 }
 
@@ -180,6 +226,12 @@ class TripModel {
   final String? containerNumber;
   final List<TripAssignment>? assignments;
   final String? reference;
+  /// Links all vehicle-trips created together in one multi-route batch.
+  final String? tripGroupId;
+  /// Index of the originating route within the batch (drives fleet-map color).
+  final int routeIndex;
+  /// Latest persisted live ETA / distance / movement-stage (may be null).
+  final TripTracking? tracking;
   final TripLocation? pickupLocation;
   final TripLocation? intermediateLocation;
   final TripLocation? dropLocation;
@@ -195,12 +247,22 @@ class TripModel {
   final LastDriverLocation? lastDriverLocation;
   /// True when this trip was created from a marketplace vehicle booking (API: isFromBooking).
   final bool isFromBooking;
+  /// Marketplace vehicle booking that created this trip.
+  final String? bookingId;
+  /// True when this trip was created from a reverse-marketplace inquiry/quote.
+  final bool isFromInquiry;
+  /// Awarded quote that created this inquiry trip.
+  final String? quoteId;
   /// `buyer` | `seller` when this trip is from a marketplace booking.
   final String? marketplaceRole;
   final TripCapabilities? capabilities;
   final int? queuePosition;
   final bool isQueued;
   final String? blockingTripId;
+
+  /// Raw multi-route builder payload persisted on DRAFT trips created via the
+  /// batch (multi-route) Create Trip flow. Used to rehydrate the route list.
+  final Map<String, dynamic>? batchDraft;
 
   TripModel({
     required this.id,
@@ -217,6 +279,9 @@ class TripModel {
     this.containerNumber,
     this.assignments,
     this.reference,
+    this.tripGroupId,
+    this.routeIndex = 0,
+    this.tracking,
     this.pickupLocation,
     this.intermediateLocation,
     this.dropLocation,
@@ -231,11 +296,15 @@ class TripModel {
     this.podDueAt,
     this.lastDriverLocation,
     this.isFromBooking = false,
+    this.bookingId,
+    this.isFromInquiry = false,
+    this.quoteId,
     this.marketplaceRole,
     this.capabilities,
     this.queuePosition,
     this.isQueued = false,
     this.blockingTripId,
+    this.batchDraft,
   });
 
   bool get isQueuedBlocked {
@@ -255,6 +324,33 @@ class TripModel {
   bool get canCloseWithoutPod => capabilities?.closeWithoutPod ?? true;
   bool get isMarketplaceBuyerView => marketplaceRole == 'buyer';
   bool get isMarketplaceBookingTrip => isFromBooking || marketplaceRole != null;
+  bool get isMarketplaceInquiryTrip => isFromInquiry || (quoteId != null && quoteId!.isNotEmpty);
+
+  bool get canCollectExtraCharges {
+    final cancelled = status.toUpperCase() == AppConstants.tripStatusCancelled;
+    if (cancelled) return false;
+    if ((isFromBooking || marketplaceRole != null) &&
+        bookingId != null &&
+        bookingId!.isNotEmpty) {
+      return true;
+    }
+    if (isFromInquiry && quoteId != null && quoteId!.isNotEmpty) return true;
+    return false;
+  }
+
+  String? extraChargeCounterpartyId(String? selfId) {
+    if (marketplaceRole == 'buyer') {
+      return transporterId.isEmpty ? null : transporterId;
+    }
+    if (marketplaceRole == 'seller') return customerId;
+    if (selfId != null && selfId.isNotEmpty) {
+      if (selfId == transporterId) return customerId;
+      if (selfId == customerId) {
+        return transporterId.isEmpty ? null : transporterId;
+      }
+    }
+    return customerId ?? (transporterId.isEmpty ? null : transporterId);
+  }
 
   TripModel copyWith({
     String? id,
@@ -271,6 +367,9 @@ class TripModel {
     String? containerNumber,
     List<TripAssignment>? assignments,
     String? reference,
+    String? tripGroupId,
+    int? routeIndex,
+    TripTracking? tracking,
     TripLocation? pickupLocation,
     TripLocation? intermediateLocation,
     TripLocation? dropLocation,
@@ -285,11 +384,15 @@ class TripModel {
     DateTime? podDueAt,
     LastDriverLocation? lastDriverLocation,
     bool? isFromBooking,
+    String? bookingId,
+    bool? isFromInquiry,
+    String? quoteId,
     String? marketplaceRole,
     TripCapabilities? capabilities,
     int? queuePosition,
     bool? isQueued,
     String? blockingTripId,
+    Map<String, dynamic>? batchDraft,
   }) {
     return TripModel(
       id: id ?? this.id,
@@ -306,6 +409,9 @@ class TripModel {
       containerNumber: containerNumber ?? this.containerNumber,
       assignments: assignments ?? this.assignments,
       reference: reference ?? this.reference,
+      tripGroupId: tripGroupId ?? this.tripGroupId,
+      routeIndex: routeIndex ?? this.routeIndex,
+      tracking: tracking ?? this.tracking,
       pickupLocation: pickupLocation ?? this.pickupLocation,
       intermediateLocation: intermediateLocation ?? this.intermediateLocation,
       dropLocation: dropLocation ?? this.dropLocation,
@@ -320,11 +426,15 @@ class TripModel {
       podDueAt: podDueAt ?? this.podDueAt,
       lastDriverLocation: lastDriverLocation ?? this.lastDriverLocation,
       isFromBooking: isFromBooking ?? this.isFromBooking,
+      bookingId: bookingId ?? this.bookingId,
+      isFromInquiry: isFromInquiry ?? this.isFromInquiry,
+      quoteId: quoteId ?? this.quoteId,
       marketplaceRole: marketplaceRole ?? this.marketplaceRole,
       capabilities: capabilities ?? this.capabilities,
       queuePosition: queuePosition ?? this.queuePosition,
       isQueued: isQueued ?? this.isQueued,
       blockingTripId: blockingTripId ?? this.blockingTripId,
+      batchDraft: batchDraft ?? this.batchDraft,
     );
   }
 
@@ -336,6 +446,8 @@ class TripModel {
     }
     final isFromBookingFlag = json['isFromBooking'] == true ||
         json['isFromBooking']?.toString().toLowerCase() == 'true';
+    final isFromInquiryFlag = json['isFromInquiry'] == true ||
+        json['isFromInquiry']?.toString().toLowerCase() == 'true';
     return TripModel(
       id: JsonParser.extractString(json['_id'] ?? json['id'], ''),
       tripId: JsonParser.extractString(json['tripId'], ''),
@@ -351,6 +463,11 @@ class TripModel {
       containerNumber: json['containerNumber']?.toString(),
       assignments: _parseAssignments(json['assignments']),
       reference: json['reference']?.toString(),
+      tripGroupId: json['tripGroupId']?.toString(),
+      routeIndex: json['routeIndex'] is num
+          ? (json['routeIndex'] as num).toInt()
+          : int.tryParse(json['routeIndex']?.toString() ?? '') ?? 0,
+      tracking: TripTracking.fromJson(json['tracking']),
       pickupLocation: _parseTripLocation(json['pickupLocation']),
       intermediateLocation: _parseTripLocation(json['intermediateLocation']),
       dropLocation: _parseTripLocation(json['dropLocation']),
@@ -368,6 +485,9 @@ class TripModel {
       podDueAt: JsonParser.extractDateTime(json['podDueAt']),
       lastDriverLocation: LastDriverLocation.fromJson(json['lastDriverLocation']),
       isFromBooking: isFromBookingFlag,
+      bookingId: JsonParser.extractId(json['bookingId']),
+      isFromInquiry: isFromInquiryFlag,
+      quoteId: JsonParser.extractId(json['quoteId']),
       marketplaceRole: json['marketplaceRole']?.toString(),
       capabilities: TripCapabilities.fromJson(json['capabilities']),
       queuePosition: json['queuePosition'] is num
@@ -376,6 +496,9 @@ class TripModel {
       isQueued: json['isQueued'] == true ||
           json['isQueued']?.toString().toLowerCase() == 'true',
       blockingTripId: JsonParser.extractId(json['blockingTripId']),
+      batchDraft: json['batchDraft'] is Map
+          ? Map<String, dynamic>.from(json['batchDraft'] as Map)
+          : null,
     );
   }
 

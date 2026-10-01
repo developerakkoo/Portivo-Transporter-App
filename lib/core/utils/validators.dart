@@ -1,17 +1,56 @@
 import '../constants/app_copy.dart';
 
 class Validators {
+  /// Digits-only 10-digit Indian mobile. Strips a leading 91 or 0.
+  static String normalizeIndianMobile(String raw) {
+    final digits = raw.replaceAll(RegExp(r'[^0-9]'), '');
+    if (digits.length == 12 && digits.startsWith('91')) {
+      return digits.substring(2);
+    }
+    if (digits.length == 11 && digits.startsWith('0')) {
+      return digits.substring(1);
+    }
+    return digits;
+  }
+
   static String? validateMobile(String? value) {
     if (value == null || value.isEmpty) {
       return 'Mobile number is required';
     }
-    if (value.length != 10) {
+    final digits = normalizeIndianMobile(value);
+    if (digits.length != 10) {
       return 'Mobile number must be 10 digits';
     }
-    if (!RegExp(r'^[0-9]+$').hasMatch(value)) {
+    if (!RegExp(r'^[0-9]+$').hasMatch(digits)) {
       return 'Mobile number must contain only digits';
     }
     return null;
+  }
+
+  /// Empty is valid. Non-empty values must be a 10-digit Indian mobile.
+  static String? validateOptionalMobile(String? value) {
+    if (value == null || value.trim().isEmpty) return null;
+    return validateMobile(value);
+  }
+
+  /// Empty is valid. Non-empty values must be a finite number >= 0.
+  static String? validateOptionalCargoWeightMt(String? value) {
+    final trimmed = value?.trim() ?? '';
+    if (trimmed.isEmpty) return null;
+    final parsed = double.tryParse(trimmed.replaceAll(',', ''));
+    if (parsed == null || !parsed.isFinite) {
+      return 'Enter a valid cargo weight in MT';
+    }
+    if (parsed < 0) {
+      return 'Cargo weight cannot be negative';
+    }
+    return null;
+  }
+
+  static double? parseOptionalCargoWeightMt(String? value) {
+    final trimmed = value?.trim() ?? '';
+    if (trimmed.isEmpty) return null;
+    return double.tryParse(trimmed.replaceAll(',', ''));
   }
   
   static String? validatePIN(String? value) {

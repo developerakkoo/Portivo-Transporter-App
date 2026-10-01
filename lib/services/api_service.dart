@@ -1,6 +1,8 @@
 import 'package:dio/dio.dart';
 import 'package:flutter/foundation.dart';
+import 'package:flutter/widgets.dart';
 import '../core/config/api_config.dart';
+import '../core/navigation/app_navigator.dart';
 import 'storage_service.dart';
 
 class ApiService {
@@ -15,6 +17,7 @@ class ApiService {
   /// 401 does not trigger another refresh (avoids infinite loops when the user
   /// is gone or the token is permanently invalid).
   static const String _kAuthRefreshRetriedKey = 'porttivo.auth_refresh_retried';
+  static bool _kycRedirectInFlight = false;
 
   late Dio _dio;
   final StorageService _storage = StorageService();
@@ -40,6 +43,8 @@ class ApiService {
     final path = options.path;
     if (path == ApiConfig.refreshToken) return true;
     if (path == ApiConfig.sendOTP) return true;
+    if (path == ApiConfig.verifyOTP) return true;
+    if (path == ApiConfig.resendOTP) return true;
     if (path == ApiConfig.pinLogin) return true;
     if (path == ApiConfig.companyUserLogin) return true;
     if (path == ApiConfig.register) return true;
@@ -198,6 +203,7 @@ class ApiService {
             if (kDebugMode) {
               print('ApiService: 403 Forbidden - Access denied');
             }
+            _openKycIfRequired(error);
           }
           
           // Handle network errors
@@ -219,6 +225,30 @@ class ApiService {
         },
       ),
     );
+  }
+
+  void _openKycIfRequired(DioException error) {
+    final data = error.response?.data;
+    if (data is! Map || data['code']?.toString() != 'KYC_REQUIRED') {
+      return;
+    }
+    final path = error.requestOptions.path;
+    if (path.contains('/transporters/kyc')) {
+      return;
+    }
+    if (_kycRedirectInFlight) return;
+
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      final nav = appNavigatorKey.currentState;
+      final context = appNavigatorKey.currentContext;
+      if (nav == null || context == null) return;
+      final routeName = ModalRoute.of(context)?.settings.name;
+      if (routeName == '/kyc') return;
+      _kycRedirectInFlight = true;
+      nav.pushNamed('/kyc').whenComplete(() {
+        _kycRedirectInFlight = false;
+      });
+    });
   }
 
   Future<bool> _refreshToken() async {
@@ -366,6 +396,28 @@ class ApiService {
   }) async {
     try {
       return await _dio.post(
+        path,
+        data: formData,
+        queryParameters: queryParameters,
+        options: options ??
+            Options(
+              contentType: 'multipart/form-data',
+            ),
+      );
+    } catch (e) {
+      rethrow;
+    }
+  }
+
+  // PUT with file upload (multipart)
+  Future<Response> putMultipart(
+    String path, {
+    required FormData formData,
+    Map<String, dynamic>? queryParameters,
+    Options? options,
+  }) async {
+    try {
+      return await _dio.put(
         path,
         data: formData,
         queryParameters: queryParameters,

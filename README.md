@@ -21,7 +21,7 @@ Pickup and drop use the native **Google Places** stack via [`google_places_autoc
 ### Production checklist
 
 1. In [Google Cloud Console](https://console.cloud.google.com/), enable **Places SDK for Android** / **Places SDK for iOS** (and Maps SDK as needed).
-2. **Restrict API keys** by Android app signing SHA-1 and iOS bundle ID; do not ship unrestricted keys. Include **debug and release** signing SHA-1 for package `com.example.prottivo_transporter`.
+2. **Restrict API keys** by Android app signing SHA-1 and iOS bundle ID; do not ship unrestricted keys. Include **debug and release** signing SHA-1 for package `com.techlapse.porttivo_transporter`.
 3. Release builds require Places ProGuard keep rules in [`android/app/proguard-rules.pro`](android/app/proguard-rules.pro) (already included).
 4. Monitor **Places Autocomplete** and **Place Details** usage and quotas; the autocomplete package manages **session tokens** for billing-efficient Autocomplete + Details pairs.
 5. Manual QA: search in India with location on/off; search outside India; `forceGlobalSearch` still biases to GPS but skips India-only filter.

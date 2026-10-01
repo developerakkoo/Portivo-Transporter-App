@@ -55,6 +55,11 @@ class _QuickTripStartSheetState extends State<QuickTripStartSheet> {
 
   String _draftSubtitle(TripModel draft) {
     final parts = <String>[];
+    // Multi-route (batch) drafts store their routes in batchDraft; show a count.
+    final rawRoutes = draft.batchDraft?['routes'];
+    if (rawRoutes is List && rawRoutes.isNotEmpty) {
+      parts.add('${rawRoutes.length} route${rawRoutes.length == 1 ? '' : 's'}');
+    }
     final route = TripOperationalLocations.routeSummary(
       tripType: draft.tripType,
       pickup: draft.pickupLocation,

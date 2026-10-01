@@ -24,6 +24,12 @@ class _DriversTabState extends State<DriversTab> {
     });
   }
 
+  Widget? _appBarLeading(BuildContext context) {
+    final canPop = Navigator.of(context).canPop();
+    if (canPop) return null;
+    return const OpenAppDrawerButton();
+  }
+
   @override
   Widget build(BuildContext context) {
     return Consumer<DriverProvider>(
@@ -36,7 +42,7 @@ class _DriversTabState extends State<DriversTab> {
           return Scaffold(
             backgroundColor: AppColors.background,
             appBar: AppBar(
-              leading: const OpenAppDrawerButton(),
+              leading: _appBarLeading(context),
               title: const Text('Drivers'),
             ),
             body: const Center(child: CircularProgressIndicator()),
@@ -47,7 +53,7 @@ class _DriversTabState extends State<DriversTab> {
           return Scaffold(
             backgroundColor: AppColors.background,
             appBar: AppBar(
-              leading: const OpenAppDrawerButton(),
+              leading: _appBarLeading(context),
               title: const Text('Drivers'),
             ),
             body: Center(
@@ -86,7 +92,7 @@ class _DriversTabState extends State<DriversTab> {
         return Scaffold(
           backgroundColor: AppColors.background,
           appBar: AppBar(
-            leading: const OpenAppDrawerButton(),
+            leading: _appBarLeading(context),
             title: const Text('Drivers'),
             actions: [
               IconButton(

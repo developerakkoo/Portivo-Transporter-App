@@ -1,5 +1,9 @@
+import 'dart:async';
+
+import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
+import 'package:intl/intl.dart';
 import 'package:provider/provider.dart';
 import '../core/constants/app_copy.dart';
 import '../core/theme/app_colors.dart';
@@ -19,6 +23,11 @@ import '../services/permission_service.dart';
 import '../core/utils/vehicle_driver_resolver.dart';
 import '../core/utils/validators.dart';
 
+final NumberFormat _inrFormat =
+    NumberFormat.currency(locale: 'en_IN', symbol: '₹', decimalDigits: 0);
+
+String _formatInr(num value) => _inrFormat.format(value);
+
 class CreateTripScreen extends StatefulWidget {
   const CreateTripScreen({super.key, this.draftId});
 
@@ -28,47 +37,92 @@ class CreateTripScreen extends StatefulWidget {
   State<CreateTripScreen> createState() => _CreateTripScreenState();
 }
 
+/// One vehicle + driver (+ optional container + advance) inside a route.
 class _AssignmentEntry {
   final TextEditingController containerController;
+  final TextEditingController advanceController;
   FocusNode? _containerFocusNode;
   VehicleModel? vehicle;
   DriverModel? driver;
 
-  _AssignmentEntry() : containerController = TextEditingController();
+  _AssignmentEntry()
+      : containerController = TextEditingController(),
+        advanceController = TextEditingController();
 
-  /// Lazily created so hot reload after adding this field does not crash on
-  /// assignment entries that already existed in memory.
-  FocusNode get containerFocusNode =>
-      _containerFocusNode ??= FocusNode();
+  FocusNode get containerFocusNode => _containerFocusNode ??= FocusNode();
+
+  double? get advance => double.tryParse(advanceController.text.trim());
+
+  bool get isComplete => vehicle != null && driver != null;
 
   void dispose() {
     containerController.dispose();
+    advanceController.dispose();
     _containerFocusNode?.dispose();
+  }
+}
+
+/// One route in a multi-route trip: its own direction, A/B/C locations and a
+/// list of vehicle/driver assignments. Each route maps 1:1 to a backend Trip.
+class _RouteEntry {
+  String tripType;
+  final OperationalLocationDraft locations;
+  final List<_AssignmentEntry> assignments;
+  final GlobalKey cardKey;
+  final TextEditingController distanceKm = TextEditingController();
+
+  _RouteEntry({String? tripType})
+      : tripType = tripType ?? AppConstants.tripTypeExport,
+        locations = OperationalLocationDraft(
+          tripType: tripType ?? AppConstants.tripTypeExport,
+        ),
+        assignments = [_AssignmentEntry()],
+        cardKey = GlobalKey();
+
+  int get vehicleCount => assignments.where((a) => a.vehicle != null).length;
+
+  int get driverCount => assignments.where((a) => a.driver != null).length;
+
+  double get advanceTotal {
+    double sum = 0;
+    for (final a in assignments) {
+      final v = a.advance;
+      if (v != null) sum += v;
+    }
+    return sum;
+  }
+
+  void dispose() {
+    locations.dispose();
+    distanceKm.dispose();
+    for (final a in assignments) {
+      a.dispose();
+    }
   }
 }
 
 class _CreateTripScreenState extends State<CreateTripScreen> {
   final _formKey = GlobalKey<FormState>();
 
-  String? _selectedTripType;
-  final List<_AssignmentEntry> _assignments = [];
-  late final OperationalLocationDraft _locations;
+  final List<_RouteEntry> _routes = [];
   final _tripReferenceController = TextEditingController();
   final _customerNameController = TextEditingController();
   final _customerFocusNode = FocusNode();
   final _tripRefFocusNode = FocusNode();
   bool _isLoading = false;
   bool _isSavingDraft = false;
+  bool _draftSavedHint = false;
   String? _draftId;
-  int _expandedAssignmentIndex = 0;
-  final Map<int, GlobalKey> _assignmentCardKeys = {};
+  Timer? _autosaveDebounce;
+  int _expandedRouteIndex = 0;
+  int _wizardStep = 0;
+  bool _payNow = true;
 
   @override
   void initState() {
     super.initState();
-    _locations = OperationalLocationDraft();
     _draftId = widget.draftId;
-    _assignments.add(_AssignmentEntry());
+    _routes.add(_RouteEntry());
     WidgetsBinding.instance.addPostFrameCallback((_) async {
       context.read<VehicleProvider>().loadVehicles(
             status: 'active',
@@ -87,14 +141,18 @@ class _CreateTripScreenState extends State<CreateTripScreen> {
     _customerFocusNode.addListener(() {
       if (mounted) setState(() {});
     });
+    _customerNameController.addListener(_scheduleAutosave);
+    _tripReferenceController.addListener(_scheduleAutosave);
   }
 
   @override
   void dispose() {
-    for (final e in _assignments) {
-      e.dispose();
+    _autosaveDebounce?.cancel();
+    _customerNameController.removeListener(_scheduleAutosave);
+    _tripReferenceController.removeListener(_scheduleAutosave);
+    for (final r in _routes) {
+      r.dispose();
     }
-    _locations.dispose();
     _tripReferenceController.dispose();
     _customerNameController.dispose();
     _customerFocusNode.dispose();
@@ -102,126 +160,114 @@ class _CreateTripScreenState extends State<CreateTripScreen> {
     super.dispose();
   }
 
-  Set<String> _selectedVehicleIds({int? exceptIndex}) {
+  // --- Aggregate summary getters -------------------------------------------
+
+  int get _totalRoutes => _routes.length;
+  int get _totalVehicles =>
+      _routes.fold(0, (sum, r) => sum + r.vehicleCount);
+  int get _totalDrivers =>
+      _routes.fold(0, (sum, r) => sum + r.driverCount);
+  double get _totalAdvance =>
+      _routes.fold(0.0, (sum, r) => sum + r.advanceTotal);
+
+  // --- Cross-route selection helpers (prevent double-booking) --------------
+
+  Set<String> _allSelectedVehicleIds({_AssignmentEntry? except}) {
     final ids = <String>{};
-    for (var i = 0; i < _assignments.length; i++) {
-      if (exceptIndex != null && i == exceptIndex) continue;
-      final v = _assignments[i].vehicle;
-      if (v != null) ids.add(v.id);
+    for (final r in _routes) {
+      for (final a in r.assignments) {
+        if (identical(a, except)) continue;
+        final v = a.vehicle;
+        if (v != null) ids.add(v.id);
+      }
     }
     return ids;
   }
 
-  Set<String> _selectedDriverIds({int? exceptIndex}) {
+  Set<String> _allSelectedDriverIds({_AssignmentEntry? except}) {
     final ids = <String>{};
-    for (var i = 0; i < _assignments.length; i++) {
-      if (exceptIndex != null && i == exceptIndex) continue;
-      final d = _assignments[i].driver;
-      if (d != null) ids.add(d.id);
+    for (final r in _routes) {
+      for (final a in r.assignments) {
+        if (identical(a, except)) continue;
+        final d = a.driver;
+        if (d != null) ids.add(d.id);
+      }
     }
     return ids;
   }
 
-  Future<void> _loadDraft(String draftId) async {
-    final tripProvider = context.read<TripProvider>();
+  // --- Route management -----------------------------------------------------
+
+  void _addRoute({bool openRouteStep = false}) {
+    final inherited = _routes.isNotEmpty
+        ? _routes.first.tripType
+        : AppConstants.tripTypeExport;
+    setState(() {
+      _routes.add(_RouteEntry(tripType: inherited));
+      _expandedRouteIndex = _routes.length - 1;
+      if (openRouteStep) _wizardStep = 1;
+    });
+    _scheduleAutosave();
+  }
+
+  void _removeRoute(int index) {
+    if (_routes.length <= 1) return;
+    setState(() {
+      _routes[index].dispose();
+      _routes.removeAt(index);
+      if (_expandedRouteIndex >= _routes.length) {
+        _expandedRouteIndex = _routes.length - 1;
+      } else if (_expandedRouteIndex > index) {
+        _expandedRouteIndex--;
+      }
+    });
+    _scheduleAutosave();
+  }
+
+  void _addAssignment(_RouteEntry route) {
+    final entry = _AssignmentEntry();
+    setState(() => route.assignments.add(entry));
+    _scheduleAutosave();
+    _editAssignment(route, entry);
+  }
+
+  void _removeAssignment(_RouteEntry route, int index) {
+    if (route.assignments.length <= 1) return;
+    setState(() {
+      route.assignments[index].dispose();
+      route.assignments.removeAt(index);
+    });
+    _scheduleAutosave();
+  }
+
+  Future<void> _openLocationPicker(
+    _RouteEntry route,
+    OperationalPoint startPoint,
+  ) async {
+    final current = route.locations.locationForPoint(startPoint);
+    final result = await Navigator.push<TripLocation>(
+      context,
+      MaterialPageRoute(
+        builder: (_) => LocationPickerScreen(
+          isPickup: startPoint == OperationalPoint.a,
+          appBarTitle:
+              TripOperationalLocations.pickerTitle(route.tripType, startPoint),
+          initialQuery: current?.address,
+          showMap: false,
+        ),
+      ),
+    );
+    if (result == null || !mounted) return;
+    setState(() => route.locations.setLocation(startPoint, result));
+    _scheduleAutosave();
+  }
+
+  Future<VehicleModel?> _selectVehicle(
+    BuildContext context,
+    _AssignmentEntry entry,
+  ) async {
     final vehicleProvider = context.read<VehicleProvider>();
-    final driverProvider = context.read<DriverProvider>();
-    final draft = await tripProvider.loadDraft(draftId);
-    if (!mounted || draft == null) return;
-
-    setState(() {
-      _draftId = draft.id;
-      _selectedTripType = draft.tripType;
-      _locations.tripType = draft.tripType;
-      _locations.pickup = draft.pickupLocation;
-      _locations.intermediate = draft.intermediateLocation;
-      _locations.drop = draft.dropLocation;
-      _locations.syncControllersFromState();
-      _tripReferenceController.text = draft.reference ?? '';
-      _customerNameController.text = draft.customerName ?? '';
-    });
-
-    final assignmentEntries = draft.assignments;
-    if (assignmentEntries != null && assignmentEntries.isNotEmpty) {
-      for (final e in _assignments) {
-        e.dispose();
-      }
-      _assignments.clear();
-      _assignmentCardKeys.clear();
-      for (final a in assignmentEntries) {
-        final entry = _AssignmentEntry();
-        entry.containerController.text = a.containerNumber;
-        try {
-          entry.vehicle = vehicleProvider.vehicles.firstWhere((v) => v.id == a.vehicleId);
-        } catch (_) {}
-        try {
-          entry.driver = driverProvider.drivers.firstWhere((d) => d.id == a.driverId);
-        } catch (_) {}
-        _assignments.add(entry);
-      }
-      if (mounted) {
-        setState(() {
-          _expandedAssignmentIndex = 0;
-        });
-      }
-    }
-  }
-
-  void _addAssignment() {
-    setState(() {
-      _assignments.add(_AssignmentEntry());
-      _expandedAssignmentIndex = _assignments.length - 1;
-      _assignmentCardKeys.clear();
-    });
-    WidgetsBinding.instance.addPostFrameCallback((_) {
-      if (!mounted) return;
-      _assignments.last.containerFocusNode.requestFocus();
-      final key = _assignmentCardKeys[_expandedAssignmentIndex];
-      if (key?.currentContext != null) {
-        Scrollable.ensureVisible(
-          key!.currentContext!,
-          alignment: 0.2,
-          duration: const Duration(milliseconds: 250),
-          curve: Curves.easeOut,
-        );
-      }
-    });
-  }
-
-  void _removeAssignment(int index) {
-    if (_assignments.length <= 1) return;
-    setState(() {
-      _assignments[index].dispose();
-      _assignments.removeAt(index);
-      _assignmentCardKeys.clear();
-      if (_expandedAssignmentIndex >= _assignments.length) {
-        _expandedAssignmentIndex = _assignments.length - 1;
-      } else if (_expandedAssignmentIndex > index) {
-        _expandedAssignmentIndex--;
-      }
-    });
-  }
-
-  String _assignmentSummary(_AssignmentEntry entry) {
-    final container =
-        Validators.normalizeContainerNumber(entry.containerController.text);
-    final containerLabel = container.isNotEmpty ? container : 'No container';
-    final vehicleLabel = entry.vehicle?.vehicleNumber ?? 'No vehicle';
-    final driverLabel =
-        entry.driver?.name ?? entry.driver?.mobile ?? 'No driver';
-    return '$containerLabel · $vehicleLabel · $driverLabel';
-  }
-
-  bool _isAssignmentComplete(_AssignmentEntry entry) {
-    return entry.vehicle != null && entry.driver != null;
-  }
-
-  Future<VehicleModel?> _selectVehicleForAssignment(
-    BuildContext context, {
-    int? assignmentIndex,
-  }) async {
-    final vehicleProvider = context.read<VehicleProvider>();
-    final excludeIds = _selectedVehicleIds(exceptIndex: assignmentIndex);
+    final excludeIds = _allSelectedVehicleIds(except: entry);
     final vehicles = vehicleProvider.vehicles
         .where((v) => !excludeIds.contains(v.id))
         .toList();
@@ -241,12 +287,12 @@ class _CreateTripScreenState extends State<CreateTripScreen> {
     );
   }
 
-  Future<DriverModel?> _selectDriverForAssignment(
-    BuildContext context, {
-    int? assignmentIndex,
-  }) async {
+  Future<DriverModel?> _selectDriver(
+    BuildContext context,
+    _AssignmentEntry entry,
+  ) async {
     final driverProvider = context.read<DriverProvider>();
-    final excludeIds = _selectedDriverIds(exceptIndex: assignmentIndex);
+    final excludeIds = _allSelectedDriverIds(except: entry);
     final drivers = driverProvider.drivers
         .where((d) =>
             d.status == AppConstants.driverStatusActive &&
@@ -264,236 +310,184 @@ class _CreateTripScreenState extends State<CreateTripScreen> {
     );
   }
 
+  // --- Payload builders -----------------------------------------------------
 
-  Future<void> _openLocationPicker(OperationalPoint startPoint) async {
-    final points = TripOperationalLocations.visiblePoints(_selectedTripType);
-    final startIndex = points.indexOf(startPoint);
-    if (startIndex < 0) return;
-
-    for (var i = startIndex; i < points.length; i++) {
-      final point = points[i];
-      final current = _locations.locationForPoint(point);
-      final result = await Navigator.push<TripLocation>(
-        context,
-        MaterialPageRoute(
-          builder: (_) => LocationPickerScreen(
-            isPickup: point == OperationalPoint.a,
-            appBarTitle: TripOperationalLocations.pickerTitle(_selectedTripType, point),
-            initialQuery: current?.address,
-          ),
-        ),
-      );
-      if (result == null || !mounted) return;
-      setState(() => _locations.setLocation(point, result));
-    }
-    _customerFocusNode.requestFocus();
-  }
-
-  Map<String, dynamic>? _buildTripPayload() {
-    if (_selectedTripType == null) return null;
-
-    final assignmentsList = <Map<String, dynamic>>[];
-    for (final e in _assignments) {
-      if (e.vehicle == null || e.driver == null) continue;
-      final cn = Validators.normalizeContainerNumber(e.containerController.text);
-      final assignment = <String, dynamic>{
-        'vehicleId': e.vehicle!.id,
-        'driverId': e.driver!.id,
-      };
-      if (cn.isNotEmpty) {
-        assignment['containerNumber'] = cn;
+  /// Batch payload for POST /trips/batch (only complete assignments included).
+  Map<String, dynamic> _buildBatchPayload() {
+    final routesPayload = <Map<String, dynamic>>[];
+    for (final r in _routes) {
+      final assignments = <Map<String, dynamic>>[];
+      for (final a in r.assignments) {
+        if (!a.isComplete) continue;
+        final cn = Validators.normalizeContainerNumber(a.containerController.text);
+        final adv = a.advance;
+        assignments.add(<String, dynamic>{
+          'vehicleId': a.vehicle!.id,
+          'driverId': a.driver!.id,
+          if (cn.isNotEmpty) 'containerNumber': cn,
+          if (adv != null) 'advanceAmount': adv,
+        });
       }
-      assignmentsList.add(assignment);
+      routesPayload.add(<String, dynamic>{
+        'tripType': r.tripType.toUpperCase(),
+        ...r.locations.buildPayload(),
+        'assignments': assignments,
+      });
     }
 
     return <String, dynamic>{
+      'customerName': _customerNameController.text.trim().toUpperCase(),
       'reference': _tripReferenceController.text.trim().isNotEmpty
           ? _tripReferenceController.text.trim().toUpperCase()
           : null,
-      'customerName': _customerNameController.text.trim().toUpperCase(),
-      ..._locations.buildPayload(),
-      'tripType': _selectedTripType!.toUpperCase(),
-      if (assignmentsList.isNotEmpty) 'assignments': assignmentsList,
+      'routes': routesPayload,
     };
   }
 
-  String? _validateDuplicateAssignments(List<Map<String, dynamic>> assignmentsList) {
-    final vehicleIds = <String>[];
-    final driverIds = <String>[];
-    for (final a in assignmentsList) {
-      final v = a['vehicleId']?.toString();
-      final d = a['driverId']?.toString();
-      if (v != null) vehicleIds.add(v);
-      if (d != null) driverIds.add(d);
+  /// Full snapshot (including incomplete rows) so a draft can be resumed.
+  Map<String, dynamic> _buildBatchDraft() {
+    final routes = <Map<String, dynamic>>[];
+    for (final r in _routes) {
+      final assignments = <Map<String, dynamic>>[];
+      for (final a in r.assignments) {
+        assignments.add(<String, dynamic>{
+          'vehicleId': a.vehicle?.id,
+          'driverId': a.driver?.id,
+          'containerNumber':
+              Validators.normalizeContainerNumber(a.containerController.text),
+          'advanceAmount': a.advance,
+        });
+      }
+      routes.add(<String, dynamic>{
+        'tripType': r.tripType,
+        'pickupLocation': r.locations.pickup?.toJson(),
+        'intermediateLocation': r.locations.intermediate?.toJson(),
+        'dropLocation': r.locations.drop?.toJson(),
+        'assignments': assignments,
+      });
     }
-    if (vehicleIds.length != vehicleIds.toSet().length) {
-      return 'Each vehicle can only be assigned once';
-    }
-    if (driverIds.length != driverIds.toSet().length) {
-      return 'Each driver can only be assigned once';
-    }
-    return null;
+    return <String, dynamic>{
+      'customerName': _customerNameController.text.trim(),
+      'reference': _tripReferenceController.text.trim(),
+      'routes': routes,
+    };
   }
 
-  String? _validateContainerFormats() {
-    for (final entry in _assignments) {
-      final raw = entry.containerController.text;
-      final normalized = Validators.normalizeContainerNumber(raw);
-      if (normalized.isEmpty) continue;
-      if (!Validators.isValidContainerNumber(raw)) {
-        return Validators.containerNumberLiveFeedback(raw).message;
+  // --- Validation -----------------------------------------------------------
+
+  /// Returns null when valid, otherwise `(message, routeIndexToExpand)`.
+  (String, int?)? _validateBeforeStart() {
+    if (_customerNameController.text.trim().isEmpty) {
+      return ('Customer is required', null);
+    }
+
+    final allVehicleIds = <String>[];
+    final allDriverIds = <String>[];
+
+    for (var i = 0; i < _routes.length; i++) {
+      final r = _routes[i];
+      if (!r.locations.isComplete) {
+        return ('Route ${i + 1}: set all locations', i);
+      }
+      final complete = r.assignments.where((a) => a.isComplete).toList();
+      if (complete.isEmpty) {
+        return ('Route ${i + 1}: add at least one vehicle and driver', i);
+      }
+      for (final a in complete) {
+        allVehicleIds.add(a.vehicle!.id);
+        allDriverIds.add(a.driver!.id);
       }
     }
+
+    if (allVehicleIds.length != allVehicleIds.toSet().length) {
+      return ('A vehicle is used in more than one route', null);
+    }
+    if (allDriverIds.length != allDriverIds.toSet().length) {
+      return ('A driver is used in more than one route', null);
+    }
     return null;
   }
 
-  bool get _canCreateTrip {
-    return _selectedTripType != null &&
-        _locations.isComplete &&
-        _customerNameController.text.trim().isNotEmpty &&
-        !_isLoading &&
-        !_isSavingDraft;
-  }
+  bool get _canStart =>
+      _customerNameController.text.trim().isNotEmpty &&
+      !_isLoading &&
+      !_isSavingDraft;
 
-  Future<void> _handleCreateTrip() async {
-    if (_formKey.currentState?.validate() ?? false) {
-      if (!_canCreateTrip) return;
+  // --- Actions --------------------------------------------------------------
 
-      final tripData = _buildTripPayload();
-      if (tripData == null) return;
+  Future<void> _handleStartTrip() async {
+    if (!(_formKey.currentState?.validate() ?? false)) return;
 
-      final rawAssignments = tripData['assignments'];
-      final assignmentsList = rawAssignments is List
-          ? rawAssignments.map((e) => Map<String, dynamic>.from(e as Map)).toList()
-          : <Map<String, dynamic>>[];
+    final error = _validateBeforeStart();
+    if (error != null) {
+      if (error.$2 != null) {
+        setState(() => _expandedRouteIndex = error.$2!);
+      }
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(content: Text(error.$1), backgroundColor: Colors.orange),
+      );
+      return;
+    }
 
-      if (assignmentsList.isEmpty) {
-        ScaffoldMessenger.of(context).showSnackBar(
-          const SnackBar(
-            content: Text('Add at least one assignment with vehicle and driver'),
-            backgroundColor: Colors.orange,
+    setState(() => _isLoading = true);
+    final navigator = Navigator.of(context);
+    final messenger = ScaffoldMessenger.of(context);
+    try {
+      final tripProvider = context.read<TripProvider>();
+      final trips = await tripProvider.createTripBatch(_buildBatchPayload());
+      if (!mounted) return;
+      if (trips != null && trips.isNotEmpty) {
+        if (_draftId != null) {
+          await tripProvider.deleteDraft(_draftId!);
+        }
+        navigator.pop();
+        messenger.showSnackBar(
+          SnackBar(
+            content: Text('Trip started with ${trips.length} route(s)'),
+            backgroundColor: Colors.green,
           ),
         );
-        return;
-      }
-
-      final dupError = _validateDuplicateAssignments(assignmentsList);
-      if (dupError != null) {
-        ScaffoldMessenger.of(context).showSnackBar(
-          SnackBar(content: Text(dupError), backgroundColor: Colors.orange),
+        navigator.pushNamed('/trip-detail', arguments: trips.first.id);
+      } else {
+        messenger.showSnackBar(
+          SnackBar(
+            content: Text(tripProvider.error ?? 'Failed to start trip'),
+            backgroundColor: Colors.red,
+          ),
         );
-        return;
       }
-
-      final containerError = _validateContainerFormats();
-      if (containerError != null) {
+    } catch (e) {
+      if (mounted) {
         ScaffoldMessenger.of(context).showSnackBar(
-          SnackBar(content: Text(containerError), backgroundColor: Colors.orange),
+          SnackBar(
+            content: Text('Error starting trip: $e'),
+            backgroundColor: Colors.red,
+          ),
         );
-        return;
       }
-
-      setState(() {
-        _isLoading = true;
-      });
-
-      try {
-        final tripProvider = Provider.of<TripProvider>(context, listen: false);
-        final trip = await tripProvider.createTrip(tripData);
-
-        if (mounted) {
-          if (trip != null) {
-            Navigator.of(context).pop();
-            if (trip.isQueuedBlocked) {
-              ScaffoldMessenger.of(context).showSnackBar(
-                const SnackBar(
-                  content: Text(
-                    'Trip created and queued. It will be ready to start when the current active trip completes.',
-                  ),
-                  backgroundColor: Colors.orange,
-                ),
-              );
-            } else {
-              ScaffoldMessenger.of(context).showSnackBar(
-                SnackBar(
-                  content: Text(
-                    'Trip created successfully with ${assignmentsList.length} assignment(s)',
-                  ),
-                  backgroundColor: Colors.green,
-                ),
-              );
-            }
-            Navigator.of(context).pushNamed(
-              '/trip-detail',
-              arguments: trip.id,
-            );
-          } else {
-            ScaffoldMessenger.of(context).showSnackBar(
-              SnackBar(
-                content: Text(tripProvider.error ?? 'Failed to create trip'),
-                backgroundColor: Colors.red,
-              ),
-            );
-          }
-        }
-      } catch (e) {
-        if (mounted) {
-          ScaffoldMessenger.of(context).showSnackBar(
-            SnackBar(
-              content: Text('Error creating trip: $e'),
-              backgroundColor: Colors.red,
-            ),
-          );
-        }
-      } finally {
-        if (mounted) {
-          setState(() {
-            _isLoading = false;
-          });
-        }
-      }
+    } finally {
+      if (mounted) setState(() => _isLoading = false);
     }
   }
 
   Future<void> _handleSaveDraft() async {
-    final tripData = _buildTripPayload();
-    if (tripData == null) {
-      ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(
-          content: Text('Select a trip type to save draft'),
-          backgroundColor: Colors.orange,
-        ),
-      );
-      return;
-    }
-
-    final rawAssignments = tripData['assignments'];
-    final assignmentsList = rawAssignments is List
-        ? rawAssignments.map((e) => Map<String, dynamic>.from(e as Map)).toList()
-        : <Map<String, dynamic>>[];
-    final dupError = _validateDuplicateAssignments(assignmentsList);
-    if (dupError != null) {
-      ScaffoldMessenger.of(context).showSnackBar(
-        SnackBar(content: Text(dupError), backgroundColor: Colors.orange),
-      );
-      return;
-    }
-
     setState(() => _isSavingDraft = true);
-
     try {
       final tripProvider = context.read<TripProvider>();
-      final draft = await tripProvider.saveDraft(tripData, draftId: _draftId);
+      final draft = await tripProvider.saveDraft(
+        _draftPayload(),
+        draftId: _draftId,
+      );
       if (!mounted) return;
       if (draft != null) {
-        setState(() => _draftId = draft.id);
+        setState(() {
+          _draftId = draft.id;
+          _draftSavedHint = true;
+        });
         await tripProvider.loadDrafts(refresh: true);
         if (!mounted) return;
         ScaffoldMessenger.of(context).showSnackBar(
-          const SnackBar(
-            content: Text('Draft saved'),
-            backgroundColor: Colors.green,
-          ),
+          const SnackBar(content: Text('Draft saved'), backgroundColor: Colors.green),
         );
       } else {
         ScaffoldMessenger.of(context).showSnackBar(
@@ -517,6 +511,201 @@ class _CreateTripScreenState extends State<CreateTripScreen> {
     }
   }
 
+  Map<String, dynamic> _draftPayload() {
+    return <String, dynamic>{
+      'customerName': _customerNameController.text.trim().isNotEmpty
+          ? _customerNameController.text.trim().toUpperCase()
+          : null,
+      'reference': _tripReferenceController.text.trim().isNotEmpty
+          ? _tripReferenceController.text.trim().toUpperCase()
+          : null,
+      'tripType': _routes.isNotEmpty
+          ? _routes.first.tripType.toUpperCase()
+          : AppConstants.tripTypeExport,
+      'batchDraft': _buildBatchDraft(),
+    };
+  }
+
+  bool get _draftHasContent {
+    if (_customerNameController.text.trim().isNotEmpty) return true;
+    if (_tripReferenceController.text.trim().isNotEmpty) return true;
+    for (final route in _routes) {
+      if ((route.locations.pickup?.address ?? '').trim().isNotEmpty) {
+        return true;
+      }
+      if ((route.locations.intermediate?.address ?? '').trim().isNotEmpty) {
+        return true;
+      }
+      if ((route.locations.drop?.address ?? '').trim().isNotEmpty) {
+        return true;
+      }
+      if (route.assignments.any((a) => a.vehicle != null || a.driver != null)) {
+        return true;
+      }
+    }
+    return false;
+  }
+
+  void _scheduleAutosave() {
+    _autosaveDebounce?.cancel();
+    if (!_draftHasContent) return;
+    _autosaveDebounce = Timer(const Duration(seconds: 2), () {
+      unawaited(_autosaveDraft());
+    });
+  }
+
+  Future<void> _autosaveDraft() async {
+    if (!mounted || _isLoading || _isSavingDraft || !_draftHasContent) return;
+    try {
+      final draft = await context.read<TripProvider>().saveDraft(
+            _draftPayload(),
+            draftId: _draftId,
+            silent: true,
+          );
+      if (!mounted || draft == null) return;
+      setState(() {
+        _draftId = draft.id;
+        _draftSavedHint = true;
+      });
+    } catch (e) {
+      if (kDebugMode) {
+        debugPrint('CreateTrip autosave failed: $e');
+      }
+    }
+  }
+
+  Future<void> _loadDraft(String draftId) async {
+    final tripProvider = context.read<TripProvider>();
+    final vehicleProvider = context.read<VehicleProvider>();
+    final driverProvider = context.read<DriverProvider>();
+    final draft = await tripProvider.loadDraft(draftId);
+    if (!mounted || draft == null) return;
+
+    VehicleModel? findVehicle(String? id) {
+      if (id == null || id.isEmpty) return null;
+      try {
+        return vehicleProvider.vehicles.firstWhere((v) => v.id == id);
+      } catch (_) {
+        return null;
+      }
+    }
+
+    DriverModel? findDriver(String? id) {
+      if (id == null || id.isEmpty) return null;
+      try {
+        return driverProvider.drivers.firstWhere((d) => d.id == id);
+      } catch (_) {
+        return null;
+      }
+    }
+
+    final batchDraft = draft.batchDraft;
+    final rawRoutes = batchDraft?['routes'];
+
+    final newRoutes = <_RouteEntry>[];
+
+    if (rawRoutes is List && rawRoutes.isNotEmpty) {
+      for (final raw in rawRoutes) {
+        if (raw is! Map) continue;
+        final map = Map<String, dynamic>.from(raw);
+        final route = _RouteEntry(
+          tripType: map['tripType']?.toString() ?? AppConstants.tripTypeExport,
+        );
+        route.locations.tripType = route.tripType;
+        route.locations.pickup = _tripLocationFromJson(map['pickupLocation']);
+        route.locations.intermediate =
+            _tripLocationFromJson(map['intermediateLocation']);
+        route.locations.drop = _tripLocationFromJson(map['dropLocation']);
+        route.locations.syncControllersFromState();
+
+        final rawAssignments = map['assignments'];
+        if (rawAssignments is List && rawAssignments.isNotEmpty) {
+          for (final a in route.assignments) {
+            a.dispose();
+          }
+          route.assignments.clear();
+          for (final ra in rawAssignments) {
+            if (ra is! Map) continue;
+            final am = Map<String, dynamic>.from(ra);
+            final entry = _AssignmentEntry();
+            entry.containerController.text =
+                am['containerNumber']?.toString() ?? '';
+            final adv = am['advanceAmount'];
+            if (adv != null) {
+              entry.advanceController.text =
+                  adv is num ? adv.toStringAsFixed(0) : adv.toString();
+            }
+            entry.vehicle = findVehicle(am['vehicleId']?.toString());
+            entry.driver = findDriver(am['driverId']?.toString());
+            route.assignments.add(entry);
+          }
+          if (route.assignments.isEmpty) {
+            route.assignments.add(_AssignmentEntry());
+          }
+        }
+        newRoutes.add(route);
+      }
+    } else {
+      // Legacy single-route draft: reconstruct one route from flat fields.
+      final route = _RouteEntry(tripType: draft.tripType);
+      route.locations.tripType = draft.tripType;
+      route.locations.pickup = draft.pickupLocation;
+      route.locations.intermediate = draft.intermediateLocation;
+      route.locations.drop = draft.dropLocation;
+      route.locations.syncControllersFromState();
+
+      final assignmentEntries = draft.assignments;
+      if (assignmentEntries != null && assignmentEntries.isNotEmpty) {
+        for (final a in route.assignments) {
+          a.dispose();
+        }
+        route.assignments.clear();
+        for (final a in assignmentEntries) {
+          final entry = _AssignmentEntry();
+          entry.containerController.text = a.containerNumber;
+          if (a.advanceAmount != null) {
+            entry.advanceController.text = a.advanceAmount!.toStringAsFixed(0);
+          }
+          entry.vehicle = findVehicle(a.vehicleId);
+          entry.driver = findDriver(a.driverId);
+          route.assignments.add(entry);
+        }
+        if (route.assignments.isEmpty) {
+          route.assignments.add(_AssignmentEntry());
+        }
+      }
+      newRoutes.add(route);
+    }
+
+    if (newRoutes.isEmpty) newRoutes.add(_RouteEntry());
+
+    setState(() {
+      _draftId = draft.id;
+      for (final r in _routes) {
+        r.dispose();
+      }
+      _routes
+        ..clear()
+        ..addAll(newRoutes);
+      _customerNameController.text =
+          batchDraft?['customerName']?.toString() ?? draft.customerName ?? '';
+      _tripReferenceController.text =
+          batchDraft?['reference']?.toString() ?? draft.reference ?? '';
+      _expandedRouteIndex = 0;
+    });
+  }
+
+  TripLocation? _tripLocationFromJson(dynamic value) {
+    if (value is Map) {
+      try {
+        return TripLocation.fromJson(Map<String, dynamic>.from(value));
+      } catch (_) {
+        return null;
+      }
+    }
+    return null;
+  }
+
   Future<void> _showAddCustomerDialog() async {
     final name = await showDialog<String>(
       context: context,
@@ -528,9 +717,7 @@ class _CreateTripScreenState extends State<CreateTripScreen> {
     final customer = await customerProvider.addCustomer(name);
     if (!mounted) return;
     if (customer != null) {
-      setState(() {
-        _customerNameController.text = customer.name;
-      });
+      setState(() => _customerNameController.text = customer.name);
       ScaffoldMessenger.of(context).showSnackBar(
         const SnackBar(content: Text('Customer added')),
       );
@@ -544,6 +731,8 @@ class _CreateTripScreenState extends State<CreateTripScreen> {
     }
   }
 
+  // --- Build ----------------------------------------------------------------
+
   @override
   Widget build(BuildContext context) {
     final textTheme = Theme.of(context).textTheme;
@@ -551,9 +740,9 @@ class _CreateTripScreenState extends State<CreateTripScreen> {
     return Consumer<AuthProvider>(
       builder: (context, authProvider, authChild) {
         final permissionService = PermissionService(authProvider);
-        
-        // Check permission - redirect if unauthorized
-        if (!permissionService.hasPermission('createTrips') && !permissionService.isTransporter) {
+
+        if (!permissionService.hasPermission('createTrips') &&
+            !permissionService.isTransporter) {
           WidgetsBinding.instance.addPostFrameCallback((_) {
             Navigator.of(context).pop();
             ScaffoldMessenger.of(context).showSnackBar(
@@ -565,468 +754,1336 @@ class _CreateTripScreenState extends State<CreateTripScreen> {
           });
           return Scaffold(
             backgroundColor: AppColors.background,
-            appBar: AppBar(title: const Text(AppCopy.newTrip)),
+            appBar: AppBar(title: const Text('Create Trip')),
             body: const Center(child: CircularProgressIndicator()),
           );
         }
 
+        final titles = ['Create Trip', 'Route & Vehicles', 'Review Trip'];
         return Scaffold(
-      backgroundColor: AppColors.background,
-      appBar: AppBar(
-        title: const Text(AppCopy.newTrip),
-      ),
-      body: SafeArea(
-        child: SingleChildScrollView(
-          padding: const EdgeInsets.all(24.0),
-          child: Form(
-            key: _formKey,
-            autovalidateMode: AutovalidateMode.onUserInteraction,
-            child: Column(
-              crossAxisAlignment: CrossAxisAlignment.stretch,
+          backgroundColor: AppColors.background,
+          resizeToAvoidBottomInset: true,
+          appBar: AppBar(
+            title: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
               children: [
-                // Trip Type Dropdown
-                _buildTripTypeDropdown(textTheme),
-                const SizedBox(height: 20.0),
-
-                // Assignments (Container + Vehicle + Driver per entry)
-                _buildAssignmentsSection(textTheme),
-                const SizedBox(height: 20.0),
-
-                // Operational locations
-                TripOperationalLocationFields(
-                  tripType: _selectedTripType,
-                  controllers: _locations.controllers,
-                  onPick: _openLocationPicker,
-                  validator: (point) {
-                    if (_locations.locationForPoint(point) == null) {
-                      return '${TripOperationalLocations.labelForPoint(_selectedTripType, point)} is required';
-                    }
-                    return null;
-                  },
-                ),
-                const SizedBox(height: 20.0),
-
-                // Customer Name
-                _buildCustomerNameField(textTheme),
-                const SizedBox(height: 20.0),
-
-                // Trip Reference (Optional)
-                _buildTripReferenceField(textTheme),
-                const SizedBox(height: 32.0),
-
-                _buildSaveDraftButton(textTheme),
-                const SizedBox(height: 12.0),
-
-                // Create Trip Button
-                _buildCreateTripButton(textTheme),
+                Text(titles[_wizardStep]),
+                if (_draftSavedHint)
+                  Text(
+                    'Draft saved',
+                    style: Theme.of(context).textTheme.bodySmall?.copyWith(
+                          color: AppColors.textSecondary,
+                          fontSize: 12,
+                        ),
+                  ),
               ],
+            ),
+            leading: IconButton(
+              icon: const Icon(Icons.arrow_back),
+              onPressed: () {
+                if (_wizardStep > 0) {
+                  setState(() => _wizardStep -= 1);
+                } else {
+                  Navigator.of(context).maybePop();
+                }
+              },
+            ),
+            actions: [
+              if (_wizardStep == 0)
+                TextButton.icon(
+                  onPressed:
+                      (_isLoading || _isSavingDraft) ? null : _handleSaveDraft,
+                  icon: const Icon(Icons.save_outlined, size: 18),
+                  label: const Text(AppCopy.saveDraft),
+                )
+              else if (_wizardStep == 1)
+                TextButton(
+                  onPressed: (_isLoading || _isSavingDraft)
+                      ? null
+                      : () => setState(() => _wizardStep = 2),
+                  child: const Text('View Summary'),
+                ),
+            ],
+          ),
+          body: SafeArea(
+            child: Form(
+              key: _formKey,
+              child: Padding(
+                padding: const EdgeInsets.fromLTRB(16, 4, 16, 8),
+                child: _wizardStep == 0
+                    ? _buildCustomerStep(textTheme)
+                    : _wizardStep == 1
+                        ? _buildRouteStep(textTheme)
+                        : _buildReviewStep(textTheme),
+              ),
+            ),
+          ),
+          bottomNavigationBar:
+              _wizardStep == 2 ? null : _buildBottomBar(textTheme),
+        );
+      },
+    );
+  }
+
+  Widget _buildCustomerStep(TextTheme textTheme) {
+    final route = _routes.first;
+    final isExport =
+        route.tripType.toUpperCase() == AppConstants.tripTypeExport;
+    return LayoutBuilder(
+      builder: (context, constraints) {
+        return SingleChildScrollView(
+          physics: const ClampingScrollPhysics(),
+          child: ConstrainedBox(
+            constraints: BoxConstraints(minHeight: constraints.maxHeight),
+            child: IntrinsicHeight(
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.stretch,
+                children: [
+                  Text(
+                    'Customer Details',
+                    style: textTheme.titleSmall
+                        ?.copyWith(fontWeight: FontWeight.w700),
+                  ),
+                  const SizedBox(height: 8),
+                  _buildCustomerNameField(textTheme),
+                  const SizedBox(height: 8),
+                  _buildTripReferenceField(textTheme),
+                  const SizedBox(height: 12),
+                  Text(
+                    'Trip Type',
+                    style: textTheme.titleSmall
+                        ?.copyWith(fontWeight: FontWeight.w700),
+                  ),
+                  const SizedBox(height: 8),
+                  _buildTripTypePills(route),
+                  const SizedBox(height: 8),
+                  if (isExport) _buildExportNote(textTheme),
+                  const Spacer(),
+                  _buildHeroIllustration(textTheme),
+                ],
+              ),
+            ),
+          ),
+        );
+      },
+    );
+  }
+
+  Widget _buildRouteStep(TextTheme textTheme) {
+    final index = _focusedRouteIndex;
+    final route = _routes[index];
+    final keyboardOpen = MediaQuery.viewInsetsOf(context).bottom > 0;
+    return KeyedSubtree(
+      key: route.cardKey,
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.stretch,
+        children: [
+          _buildCustomerSubtitle(textTheme),
+          if (_routes.length > 1) ...[
+            _buildRouteSwitcher(),
+            const SizedBox(height: 6),
+          ],
+          _buildRouteHeader(index, route, textTheme),
+          _buildTimeline(route),
+          const SizedBox(height: 6),
+          _buildDistanceField(route),
+          const SizedBox(height: 16),
+          Visibility(
+            visible: !keyboardOpen,
+            maintainState: true,
+            child: _buildVehiclesHeader(index, route, textTheme),
+          ),
+          Expanded(
+            child: Visibility(
+              visible: !keyboardOpen,
+              maintainState: true,
+              child: _buildVehicleList(route),
+            ),
+          ),
+          Visibility(
+            visible: !keyboardOpen,
+            maintainState: true,
+            child: Padding(
+              padding: const EdgeInsets.only(top: 6),
+              child: _buildDashedButton(
+                label: 'Add Another Route',
+                onPressed: _addRoute,
+              ),
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+
+  Widget _buildReviewStep(TextTheme textTheme) {
+    final index = _focusedRouteIndex;
+    final route = _routes[index];
+    final contentWidth = MediaQuery.sizeOf(context).width - 32;
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.stretch,
+      children: [
+        Expanded(
+          child: FittedBox(
+            fit: BoxFit.scaleDown,
+            alignment: Alignment.topCenter,
+            child: SizedBox(
+              width: contentWidth,
+              child: Column(
+                mainAxisSize: MainAxisSize.min,
+                crossAxisAlignment: CrossAxisAlignment.stretch,
+                children: [
+                  _buildReviewCustomerCard(textTheme),
+                  const SizedBox(height: 8),
+                  if (_routes.length > 1) ...[
+                    _buildRouteSwitcher(),
+                    const SizedBox(height: 6),
+                  ],
+                  _buildReviewRouteCard(index, route, textTheme),
+                  const SizedBox(height: 8),
+                  _buildReviewVehiclesCard(textTheme),
+                  const SizedBox(height: 8),
+                  _buildTotalAdvanceRow(textTheme),
+                  const SizedBox(height: 6),
+                  _buildPaymentChoice(textTheme),
+                ],
+              ),
+            ),
+          ),
+        ),
+        const SizedBox(height: 8),
+        _buildDashedButton(
+          label: 'Add Another Route',
+          onPressed: () => _addRoute(openRouteStep: true),
+        ),
+        const SizedBox(height: 8),
+        Row(
+          children: [
+            Expanded(
+              child: OutlinedButton.icon(
+                onPressed: (_isLoading || _isSavingDraft)
+                    ? null
+                    : () => setState(() => _wizardStep = 1),
+                icon: const Icon(Icons.arrow_back, size: 18),
+                label: const Text('Edit Trip'),
+              ),
+            ),
+            const SizedBox(width: 10),
+            Expanded(
+              flex: 2,
+              child: ElevatedButton.icon(
+                onPressed: _canStart ? _handleStartTrip : null,
+                icon: _isLoading
+                    ? const SizedBox(
+                        height: 18,
+                        width: 18,
+                        child: CircularProgressIndicator(
+                          strokeWidth: 2,
+                          valueColor:
+                              AlwaysStoppedAnimation<Color>(AppColors.background),
+                        ),
+                      )
+                    : const Icon(Icons.play_arrow, size: 20),
+                label: const Text('Start Trip'),
+              ),
+            ),
+          ],
+        ),
+        const SizedBox(height: 8),
+        _buildAllSetBanner(textTheme),
+      ],
+    );
+  }
+
+  int get _focusedRouteIndex =>
+      _expandedRouteIndex.clamp(0, _routes.length - 1);
+
+  Widget _buildCustomerSubtitle(TextTheme textTheme) {
+    final name = _customerNameController.text.trim();
+    final ref = _tripReferenceController.text.trim();
+    final refPart = ref.isEmpty ? '' : '  |  Ref No.: $ref';
+    return Padding(
+      padding: const EdgeInsets.only(bottom: 4),
+      child: Text(
+        'Customer: ${name.isEmpty ? '—' : name}$refPart',
+        maxLines: 1,
+        overflow: TextOverflow.ellipsis,
+        style: textTheme.bodySmall?.copyWith(color: AppColors.textSecondary),
+      ),
+    );
+  }
+
+  Widget _buildTripTypePills(_RouteEntry route, {VoidCallback? onChanged}) {
+    const types = [
+      AppConstants.tripTypeImport,
+      AppConstants.tripTypeExport,
+      AppConstants.tripTypeLocal,
+    ];
+    return Row(
+      children: [
+        for (var i = 0; i < types.length; i++) ...[
+          if (i > 0) const SizedBox(width: 8),
+          Expanded(child: _buildTypePill(route, types[i], onChanged)),
+        ],
+      ],
+    );
+  }
+
+  Widget _buildTypePill(
+    _RouteEntry route,
+    String type,
+    VoidCallback? onChanged,
+  ) {
+    final selected = route.tripType.toUpperCase() == type;
+    final label = '${type[0]}${type.substring(1).toLowerCase()}';
+    return Material(
+      color: selected ? AppColors.primary : AppColors.background,
+      borderRadius: BorderRadius.circular(24),
+      child: InkWell(
+        onTap: () {
+          setState(() {
+            route.tripType = type;
+            route.locations.onTripTypeChanged(type);
+          });
+          onChanged?.call();
+        },
+        borderRadius: BorderRadius.circular(24),
+        child: Container(
+          height: 40,
+          alignment: Alignment.center,
+          decoration: BoxDecoration(
+            borderRadius: BorderRadius.circular(24),
+            border: Border.all(
+              color: selected ? AppColors.primary : AppColors.dividerGrey,
+            ),
+          ),
+          child: Text(
+            label,
+            style: TextStyle(
+              color: selected ? AppColors.background : AppColors.textPrimary,
+              fontWeight: FontWeight.w600,
+              fontSize: 14,
             ),
           ),
         ),
       ),
     );
-      },
-    );
   }
 
-  Widget _buildTripTypeDropdown(TextTheme textTheme) {
-    return DropdownButtonFormField<String>(
-      value: _selectedTripType,
-      decoration: const InputDecoration(
-        labelText: 'Trip Type',
-        hintText: 'Select trip type',
+  Widget _buildExportNote(TextTheme textTheme) {
+    return Container(
+      padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 10),
+      decoration: BoxDecoration(
+        color: AppColors.success.withValues(alpha: 0.1),
+        borderRadius: BorderRadius.circular(10),
       ),
-      items: const [
-        DropdownMenuItem(value: AppConstants.tripTypeImport, child: Text('Import')),
-        DropdownMenuItem(value: AppConstants.tripTypeExport, child: Text('Export')),
-        DropdownMenuItem(value: AppConstants.tripTypeLocal, child: Text('Local')),
-      ],
-      onChanged: (value) {
-        setState(() {
-          _selectedTripType = value;
-          _locations.onTripTypeChanged(value);
-        });
-      },
-      validator: (value) {
-        if (value == null || value.isEmpty) {
-          return 'Please select a trip type';
-        }
-        return null;
-      },
+      child: Row(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          const Icon(Icons.info_outline, color: AppColors.success, size: 18),
+          const SizedBox(width: 8),
+          Expanded(
+            child: Text(
+              'For Export trips, return point (C) will be same as pickup point (A). You can change it later if required.',
+              style: textTheme.bodySmall?.copyWith(
+                color: AppColors.textSecondary,
+                height: 1.3,
+              ),
+            ),
+          ),
+        ],
+      ),
     );
   }
 
-  Widget _buildAssignmentsSection(TextTheme textTheme) {
-    final accordionMode = _assignments.length > 1;
-
+  Widget _buildHeroIllustration(TextTheme textTheme) {
     return Column(
-      crossAxisAlignment: CrossAxisAlignment.start,
+      mainAxisSize: MainAxisSize.min,
       children: [
-        Text(
-          'Containers, Vehicles & Drivers',
-          style: textTheme.titleMedium?.copyWith(
-            fontWeight: FontWeight.w600,
-            color: AppColors.textPrimary,
-          ),
+        const Icon(
+          Icons.local_shipping_outlined,
+          size: 64,
+          color: AppColors.primary,
         ),
-        const SizedBox(height: 8.0),
+        const SizedBox(height: 8),
         Text(
-          'Add at least one container with vehicle and driver. One container = one vehicle = one driver.',
-          style: textTheme.bodySmall?.copyWith(
+          'Move Faster.',
+          style: textTheme.titleMedium?.copyWith(fontWeight: FontWeight.w700),
+        ),
+        Text(
+          'Manage Smarter.',
+          style: textTheme.titleMedium?.copyWith(
+            fontWeight: FontWeight.w500,
             color: AppColors.textSecondary,
           ),
         ),
-        const SizedBox(height: 12.0),
-        ...List.generate(_assignments.length, (index) {
-          final entry = _assignments[index];
-          final isExpanded = !accordionMode || _expandedAssignmentIndex == index;
+        const SizedBox(height: 12),
+        Row(
+          mainAxisAlignment: MainAxisAlignment.center,
+          children: [
+            Container(
+              width: 28,
+              height: 28,
+              alignment: Alignment.center,
+              decoration: BoxDecoration(
+                color: AppColors.primary,
+                borderRadius: BorderRadius.circular(6),
+              ),
+              child: const Text(
+                'P',
+                style: TextStyle(
+                  color: Colors.white,
+                  fontWeight: FontWeight.w800,
+                  fontSize: 16,
+                ),
+              ),
+            ),
+            const SizedBox(width: 8),
+            const Text(
+              'PORTTIVO',
+              style: TextStyle(
+                fontWeight: FontWeight.w800,
+                letterSpacing: 1.4,
+                fontSize: 16,
+              ),
+            ),
+          ],
+        ),
+      ],
+    );
+  }
 
-          return Padding(
-            padding: const EdgeInsets.only(bottom: 16.0),
-            child: KeyedSubtree(
-              key: _assignmentCardKeys.putIfAbsent(index, () => GlobalKey()),
-              child: Card(
-                elevation: 0,
-                shape: RoundedRectangleBorder(
-                  borderRadius: BorderRadius.circular(12.0),
-                  side: BorderSide(
-                    color: isExpanded && accordionMode
-                        ? AppColors.primary
-                        : AppColors.dividerGrey,
-                    width: isExpanded && accordionMode ? 1.5 : 1.0,
+  Widget _buildRouteSwitcher() {
+    return SizedBox(
+      height: 32,
+      child: ListView.separated(
+        scrollDirection: Axis.horizontal,
+        itemCount: _routes.length,
+        separatorBuilder: (_, __) => const SizedBox(width: 8),
+        itemBuilder: (context, index) {
+          final selected = index == _focusedRouteIndex;
+          return ChoiceChip(
+            label: Text('Route ${index + 1}'),
+            selected: selected,
+            showCheckmark: false,
+            visualDensity: VisualDensity.compact,
+            labelStyle: TextStyle(
+              fontSize: 12,
+              color: selected ? AppColors.background : AppColors.textPrimary,
+            ),
+            selectedColor: AppColors.primary,
+            backgroundColor: AppColors.offWhite,
+            onSelected: (_) => setState(() => _expandedRouteIndex = index),
+          );
+        },
+      ),
+    );
+  }
+
+  Widget _buildRouteHeader(int index, _RouteEntry route, TextTheme textTheme) {
+    return Row(
+      children: [
+        Text(
+          'Route ${index + 1}',
+          style: textTheme.titleSmall?.copyWith(fontWeight: FontWeight.w700),
+        ),
+        const SizedBox(width: 8),
+        _buildDirectionChip(route.tripType),
+        const Spacer(),
+        _compactTextButton('Edit', () => _showRouteEditor(route)),
+      ],
+    );
+  }
+
+  Widget _buildTimeline(_RouteEntry route) {
+    final points = TripOperationalLocations.visiblePoints(route.tripType);
+    return Column(
+      children: [
+        for (var i = 0; i < points.length; i++) ...[
+          _buildPointRow(route, points[i]),
+          if (i < points.length - 1)
+            Align(
+              alignment: Alignment.centerLeft,
+              child: Container(
+                margin: const EdgeInsets.only(left: 10),
+                width: 2,
+                height: 8,
+                color: AppColors.dividerGrey,
+              ),
+            ),
+        ],
+      ],
+    );
+  }
+
+  Widget _buildPointRow(_RouteEntry route, OperationalPoint point) {
+    final address = _pointAddress(route, point);
+    final empty =
+        route.locations.locationForPoint(point)?.address?.trim().isEmpty ??
+            true;
+    return InkWell(
+      onTap: () => _openLocationPicker(route, point),
+      child: Padding(
+        padding: const EdgeInsets.symmetric(vertical: 3),
+        child: Row(
+          children: [
+            _pointBadge(point),
+            const SizedBox(width: 10),
+            Expanded(
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  Text(
+                    address,
+                    maxLines: 1,
+                    overflow: TextOverflow.ellipsis,
+                    style: TextStyle(
+                      fontWeight: FontWeight.w600,
+                      fontSize: 13.5,
+                      color: empty ? AppColors.textMuted : AppColors.textPrimary,
+                    ),
+                  ),
+                  if (_pointSameAsA(route, point))
+                    const Text(
+                      'Same as Point A (auto-filled)',
+                      maxLines: 1,
+                      overflow: TextOverflow.ellipsis,
+                      style: TextStyle(
+                        fontSize: 11,
+                        color: AppColors.textSecondary,
+                      ),
+                    ),
+                ],
+              ),
+            ),
+            const Icon(Icons.menu, size: 18, color: AppColors.textSecondary),
+          ],
+        ),
+      ),
+    );
+  }
+
+  Widget _pointBadge(OperationalPoint point) {
+    final color = switch (point) {
+      OperationalPoint.a => AppColors.success,
+      OperationalPoint.b => AppColors.info,
+      OperationalPoint.c => AppColors.primary,
+    };
+    final letter = switch (point) {
+      OperationalPoint.a => 'A',
+      OperationalPoint.b => 'B',
+      OperationalPoint.c => 'C',
+    };
+    return Container(
+      width: 22,
+      height: 22,
+      alignment: Alignment.center,
+      decoration: BoxDecoration(color: color, shape: BoxShape.circle),
+      child: Text(
+        letter,
+        style: const TextStyle(
+          color: Colors.white,
+          fontSize: 12,
+          fontWeight: FontWeight.w700,
+        ),
+      ),
+    );
+  }
+
+  String _pointAddress(_RouteEntry route, OperationalPoint point) {
+    final addr = route.locations.locationForPoint(point)?.address?.trim();
+    if (addr == null || addr.isEmpty) {
+      return 'Select ${TripOperationalLocations.labelForPoint(route.tripType, point)}';
+    }
+    return addr;
+  }
+
+  bool _pointSameAsA(_RouteEntry route, OperationalPoint point) {
+    if (point != OperationalPoint.c) return false;
+    final a = route.locations.pickup?.address?.trim();
+    final c = route.locations.drop?.address?.trim();
+    return a != null && a.isNotEmpty && a == c;
+  }
+
+  Widget _buildDistanceField(_RouteEntry route) {
+    return TextField(
+      controller: route.distanceKm,
+      keyboardType: const TextInputType.numberWithOptions(decimal: true),
+      inputFormatters: [
+        FilteringTextInputFormatter.allow(RegExp(r'[0-9.]')),
+      ],
+      style: const TextStyle(fontSize: 14),
+      decoration: const InputDecoration(
+        isDense: true,
+        contentPadding: EdgeInsets.symmetric(horizontal: 12, vertical: 10),
+        labelText: 'Estimated Distance (Optional)',
+        hintText: 'e.g. 125',
+        suffixText: 'km',
+        prefixIcon: Icon(Icons.alt_route, size: 18),
+      ),
+    );
+  }
+
+  Widget _buildVehiclesHeader(
+    int index,
+    _RouteEntry route,
+    TextTheme textTheme,
+  ) {
+    return Row(
+      children: [
+        Expanded(
+          child: Text(
+            'Vehicles for Route ${index + 1}',
+            style: textTheme.titleSmall?.copyWith(fontWeight: FontWeight.w700),
+          ),
+        ),
+        _compactTextButton(
+          'Add Vehicle',
+          () => _addAssignment(route),
+          icon: Icons.add,
+        ),
+      ],
+    );
+  }
+
+  Widget _buildVehicleList(_RouteEntry route) {
+    return ListView.separated(
+      padding: EdgeInsets.zero,
+      physics: const ClampingScrollPhysics(),
+      itemCount: route.assignments.length,
+      separatorBuilder: (_, __) => const Divider(height: 1),
+      itemBuilder: (context, index) => _buildVehicleRow(route, index),
+    );
+  }
+
+  Widget _buildVehicleRow(_RouteEntry route, int index) {
+    final entry = route.assignments[index];
+    final number = entry.vehicle?.vehicleNumber ?? 'Select vehicle';
+    final driverName = entry.driver?.name?.trim();
+    final driverLabel = (driverName == null || driverName.isEmpty)
+        ? (entry.driver?.mobile ?? 'Select driver')
+        : driverName;
+    return InkWell(
+      onTap: () => _editAssignment(route, entry),
+      child: Padding(
+        padding: const EdgeInsets.symmetric(vertical: 6),
+        child: Row(
+          children: [
+            const Icon(Icons.local_shipping, size: 20, color: AppColors.primary),
+            const SizedBox(width: 8),
+            Expanded(
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  Text(
+                    number,
+                    maxLines: 1,
+                    overflow: TextOverflow.ellipsis,
+                    style: TextStyle(
+                      fontWeight: FontWeight.w700,
+                      fontSize: 13.5,
+                      color: entry.vehicle == null
+                          ? AppColors.textMuted
+                          : AppColors.textPrimary,
+                    ),
+                  ),
+                  Text(
+                    driverLabel,
+                    maxLines: 1,
+                    overflow: TextOverflow.ellipsis,
+                    style: const TextStyle(
+                      fontSize: 12,
+                      color: AppColors.textSecondary,
+                    ),
+                  ),
+                ],
+              ),
+            ),
+            Column(
+              crossAxisAlignment: CrossAxisAlignment.end,
+              children: [
+                const Text(
+                  'Advance',
+                  style: TextStyle(fontSize: 10, color: AppColors.textSecondary),
+                ),
+                Text(
+                  _formatInr(entry.advance ?? 0),
+                  style: const TextStyle(
+                    fontWeight: FontWeight.w700,
+                    fontSize: 13,
                   ),
                 ),
-                child: Padding(
-                  padding: const EdgeInsets.all(16.0),
-                  child: Column(
-                    crossAxisAlignment: CrossAxisAlignment.start,
-                    children: [
-                      _buildAssignmentHeader(
-                        index: index,
-                        entry: entry,
-                        textTheme: textTheme,
-                        isExpanded: isExpanded,
-                        accordionMode: accordionMode,
-                        onExpand: accordionMode && !isExpanded
-                            ? () => setState(
-                                  () => _expandedAssignmentIndex = index,
-                                )
-                            : null,
-                      ),
-                      Visibility(
-                        visible: isExpanded,
-                        maintainState: true,
-                        maintainAnimation: true,
-                        child: _buildAssignmentFields(
-                          entry: entry,
-                          textTheme: textTheme,
-                          assignmentIndex: index,
+              ],
+            ),
+            const Icon(Icons.chevron_right, size: 18, color: AppColors.textSecondary),
+            if (route.assignments.length > 1)
+              IconButton(
+                visualDensity: VisualDensity.compact,
+                padding: EdgeInsets.zero,
+                constraints: const BoxConstraints(minWidth: 32, minHeight: 32),
+                tooltip: 'Remove vehicle',
+                icon: const Icon(
+                  Icons.delete_outline,
+                  color: AppColors.error,
+                  size: 20,
+                ),
+                onPressed: () => _removeAssignment(route, index),
+              ),
+          ],
+        ),
+      ),
+    );
+  }
+
+  Widget _buildReviewCustomerCard(TextTheme textTheme) {
+    final customer = _customerNameController.text.trim();
+    final reference = _tripReferenceController.text.trim();
+    final tripType = _routes.first.tripType;
+    final typeLabel = '${tripType[0]}${tripType.substring(1).toLowerCase()}';
+    return Container(
+      padding: const EdgeInsets.all(10),
+      decoration: _cardDecoration(),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Text(
+            'Customer Details',
+            style: textTheme.labelMedium?.copyWith(color: AppColors.textSecondary),
+          ),
+          const SizedBox(height: 4),
+          Row(
+            children: [
+              const Icon(Icons.apartment_outlined, size: 18, color: AppColors.primary),
+              const SizedBox(width: 8),
+              Expanded(
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    Text(
+                      customer.isEmpty ? '—' : customer,
+                      maxLines: 1,
+                      overflow: TextOverflow.ellipsis,
+                      style: const TextStyle(fontWeight: FontWeight.w700),
+                    ),
+                    Text(
+                      'Reference No.  ${reference.isEmpty ? '—' : reference}',
+                      maxLines: 1,
+                      overflow: TextOverflow.ellipsis,
+                      style: textTheme.bodySmall
+                          ?.copyWith(color: AppColors.textSecondary),
+                    ),
+                  ],
+                ),
+              ),
+            ],
+          ),
+          const SizedBox(height: 6),
+          Row(
+            children: [
+              Text(
+                'Trip Type',
+                style: textTheme.bodySmall?.copyWith(color: AppColors.textSecondary),
+              ),
+              const Spacer(),
+              const Icon(Icons.swap_horiz, size: 16, color: AppColors.success),
+              const SizedBox(width: 4),
+              Text(typeLabel, style: const TextStyle(fontWeight: FontWeight.w700)),
+            ],
+          ),
+        ],
+      ),
+    );
+  }
+
+  Widget _buildReviewRouteCard(int index, _RouteEntry route, TextTheme textTheme) {
+    return Container(
+      padding: const EdgeInsets.fromLTRB(10, 4, 10, 8),
+      decoration: _cardDecoration(),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.stretch,
+        children: [
+          Row(
+            children: [
+              Text(
+                'Route ${index + 1}',
+                style: textTheme.titleSmall?.copyWith(fontWeight: FontWeight.w700),
+              ),
+              const SizedBox(width: 8),
+              _buildDirectionChip(route.tripType),
+              const Spacer(),
+              _compactTextButton('Edit', () {
+                setState(() {
+                  _expandedRouteIndex = index;
+                  _wizardStep = 1;
+                });
+              }),
+            ],
+          ),
+          _buildTimeline(route),
+        ],
+      ),
+    );
+  }
+
+  Widget _buildReviewVehiclesCard(TextTheme textTheme) {
+    return Container(
+      padding: const EdgeInsets.fromLTRB(10, 4, 10, 10),
+      decoration: _cardDecoration(),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Row(
+            children: [
+              Text(
+                'Vehicles ($_totalVehicles)',
+                style: textTheme.titleSmall?.copyWith(fontWeight: FontWeight.w700),
+              ),
+              const Spacer(),
+              _compactTextButton(
+                'Edit',
+                () => setState(() => _wizardStep = 1),
+              ),
+            ],
+          ),
+          Row(
+            children: [
+              const Icon(Icons.local_shipping, size: 18, color: AppColors.primary),
+              const SizedBox(width: 8),
+              Expanded(
+                child: Text(
+                  '$_totalVehicles Vehicles  |  $_totalDrivers Drivers',
+                  maxLines: 1,
+                  overflow: TextOverflow.ellipsis,
+                  style: const TextStyle(fontWeight: FontWeight.w600, fontSize: 13),
+                ),
+              ),
+            ],
+          ),
+          const SizedBox(height: 2),
+          Text(
+            'Container details can be added later',
+            style: textTheme.bodySmall?.copyWith(color: AppColors.textSecondary),
+          ),
+        ],
+      ),
+    );
+  }
+
+  Widget _buildTotalAdvanceRow(TextTheme textTheme) {
+    return Container(
+      padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 10),
+      decoration: BoxDecoration(
+        color: AppColors.success.withValues(alpha: 0.1),
+        borderRadius: BorderRadius.circular(10),
+      ),
+      child: Row(
+        children: [
+          const Icon(
+            Icons.account_balance_wallet_outlined,
+            size: 18,
+            color: AppColors.success,
+          ),
+          const SizedBox(width: 8),
+          Text(
+            'Total Advance',
+            style: textTheme.titleSmall?.copyWith(fontWeight: FontWeight.w600),
+          ),
+          const Spacer(),
+          Text(
+            _formatInr(_totalAdvance),
+            style: textTheme.titleMedium?.copyWith(fontWeight: FontWeight.w800),
+          ),
+        ],
+      ),
+    );
+  }
+
+  Widget _buildPaymentChoice(TextTheme textTheme) {
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        Row(
+          children: [
+            Text(
+              'Make Driver Advance',
+              style: textTheme.titleSmall?.copyWith(fontWeight: FontWeight.w700),
+            ),
+            const SizedBox(width: 4),
+            const Tooltip(
+              message:
+                  'Choose when the advance is collected. Either option starts the trip.',
+              child: Icon(Icons.info_outline, size: 16, color: AppColors.textSecondary),
+            ),
+          ],
+        ),
+        const SizedBox(height: 4),
+        Row(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            Expanded(
+              child: _buildPayOption(
+                payNow: true,
+                title: 'Pay Now',
+                subtitle: 'Pay ${_formatInr(_totalAdvance)} and start the trip',
+              ),
+            ),
+            const SizedBox(width: 8),
+            Expanded(
+              child: _buildPayOption(
+                payNow: false,
+                title: 'Pay Later',
+                subtitle: 'Pay before delivery',
+              ),
+            ),
+          ],
+        ),
+      ],
+    );
+  }
+
+  Widget _buildPayOption({
+    required bool payNow,
+    required String title,
+    required String subtitle,
+  }) {
+    final selected = _payNow == payNow;
+    return InkWell(
+      onTap: () => setState(() => _payNow = payNow),
+      borderRadius: BorderRadius.circular(8),
+      child: Padding(
+        padding: const EdgeInsets.symmetric(vertical: 2),
+        child: Row(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            Icon(
+              selected ? Icons.radio_button_checked : Icons.radio_button_off,
+              size: 18,
+              color: selected ? AppColors.primary : AppColors.textMuted,
+            ),
+            const SizedBox(width: 6),
+            Expanded(
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  Text(
+                    title,
+                    style: const TextStyle(fontWeight: FontWeight.w700, fontSize: 13),
+                  ),
+                  Text(
+                    subtitle,
+                    maxLines: 2,
+                    overflow: TextOverflow.ellipsis,
+                    style: const TextStyle(
+                      fontSize: 11,
+                      color: AppColors.textSecondary,
+                      height: 1.25,
+                    ),
+                  ),
+                ],
+              ),
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+
+  Widget _buildAllSetBanner(TextTheme textTheme) {
+    return Container(
+      padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 8),
+      decoration: BoxDecoration(
+        color: AppColors.success.withValues(alpha: 0.1),
+        borderRadius: BorderRadius.circular(10),
+      ),
+      child: Row(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          const Icon(Icons.check_circle, color: AppColors.success, size: 18),
+          const SizedBox(width: 8),
+          Expanded(
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                const Text(
+                  'All Set!',
+                  style: TextStyle(fontWeight: FontWeight.w700, fontSize: 13),
+                ),
+                Text(
+                  'Once you start the trip, drivers will be notified and you can track it in real-time.',
+                  style: textTheme.bodySmall?.copyWith(
+                    color: AppColors.textSecondary,
+                    height: 1.25,
+                  ),
+                ),
+              ],
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+
+  BoxDecoration _cardDecoration() {
+    return BoxDecoration(
+      color: AppColors.offWhite,
+      borderRadius: BorderRadius.circular(12),
+      border: Border.all(color: AppColors.dividerGrey),
+    );
+  }
+
+  Widget _compactTextButton(
+    String label,
+    VoidCallback onPressed, {
+    IconData? icon,
+  }) {
+    return TextButton(
+      style: TextButton.styleFrom(
+        visualDensity: VisualDensity.compact,
+        padding: const EdgeInsets.symmetric(horizontal: 8),
+        minimumSize: const Size(0, 32),
+        tapTargetSize: MaterialTapTargetSize.shrinkWrap,
+      ),
+      onPressed: onPressed,
+      child: icon == null
+          ? Text(label)
+          : Row(
+              mainAxisSize: MainAxisSize.min,
+              children: [
+                Icon(icon, size: 16),
+                const SizedBox(width: 2),
+                Text(label),
+              ],
+            ),
+    );
+  }
+
+  Widget _buildDashedButton({
+    required String label,
+    required VoidCallback onPressed,
+  }) {
+    return Material(
+      color: Colors.transparent,
+      child: InkWell(
+        onTap: onPressed,
+        borderRadius: BorderRadius.circular(12),
+        child: CustomPaint(
+          painter: const _DashedBorderPainter(color: AppColors.primary),
+          child: SizedBox(
+            width: double.infinity,
+            child: Padding(
+              padding: const EdgeInsets.symmetric(vertical: 8),
+              child: Row(
+                mainAxisAlignment: MainAxisAlignment.center,
+                children: [
+                  const Icon(Icons.add, size: 18, color: AppColors.primary),
+                  const SizedBox(width: 6),
+                  Text(
+                    label,
+                    style: const TextStyle(
+                      color: AppColors.primary,
+                      fontWeight: FontWeight.w600,
+                    ),
+                  ),
+                ],
+              ),
+            ),
+          ),
+        ),
+      ),
+    );
+  }
+
+  Widget _buildDirectionChip(String label) {
+    final normalized = label.toUpperCase();
+    final color = switch (normalized) {
+      AppConstants.tripTypeImport => AppColors.info,
+      AppConstants.tripTypeLocal => AppColors.warning,
+      _ => AppColors.success,
+    };
+    final pretty = '${normalized[0]}${normalized.substring(1).toLowerCase()}';
+    return Container(
+      padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 2),
+      decoration: BoxDecoration(
+        color: color.withValues(alpha: 0.12),
+        borderRadius: BorderRadius.circular(6),
+      ),
+      child: Text(
+        pretty,
+        style: TextStyle(
+          color: color,
+          fontSize: 11,
+          fontWeight: FontWeight.w700,
+        ),
+      ),
+    );
+  }
+
+  Future<void> _showRouteEditor(_RouteEntry route) async {
+    await showModalBottomSheet<void>(
+      context: context,
+      backgroundColor: AppColors.background,
+      shape: const RoundedRectangleBorder(
+        borderRadius: BorderRadius.vertical(top: Radius.circular(16)),
+      ),
+      builder: (sheetContext) {
+        return StatefulBuilder(
+          builder: (context, setSheetState) {
+            final points = TripOperationalLocations.visiblePoints(route.tripType);
+            final textTheme = Theme.of(context).textTheme;
+            return SafeArea(
+              child: Padding(
+                padding: const EdgeInsets.fromLTRB(16, 12, 16, 16),
+                child: Column(
+                  mainAxisSize: MainAxisSize.min,
+                  crossAxisAlignment: CrossAxisAlignment.stretch,
+                  children: [
+                    Text(
+                      'Edit route',
+                      style: textTheme.titleMedium
+                          ?.copyWith(fontWeight: FontWeight.w700),
+                    ),
+                    const SizedBox(height: 12),
+                    Text('Trip type', style: textTheme.labelLarge),
+                    const SizedBox(height: 8),
+                    _buildTripTypePills(route, onChanged: () => setSheetState(() {})),
+                    const SizedBox(height: 8),
+                    for (final point in points)
+                      ListTile(
+                        contentPadding: EdgeInsets.zero,
+                        leading: _pointBadge(point),
+                        title: Text(
+                          _pointAddress(route, point),
+                          maxLines: 1,
+                          overflow: TextOverflow.ellipsis,
                         ),
+                        trailing: const Icon(Icons.chevron_right),
+                        onTap: () async {
+                          Navigator.of(sheetContext).pop();
+                          await _openLocationPicker(route, point);
+                        },
+                      ),
+                    if (_routes.length > 1)
+                      TextButton(
+                        onPressed: () {
+                          final index = _routes.indexOf(route);
+                          Navigator.of(sheetContext).pop();
+                          if (index >= 0) _removeRoute(index);
+                        },
+                        child: const Text(
+                          'Remove route',
+                          style: TextStyle(color: AppColors.error),
+                        ),
+                      ),
+                  ],
+                ),
+              ),
+            );
+          },
+        );
+      },
+    );
+  }
+
+  Future<void> _editAssignment(_RouteEntry route, _AssignmentEntry entry) async {
+    await showModalBottomSheet<void>(
+      context: context,
+      isScrollControlled: true,
+      backgroundColor: AppColors.background,
+      shape: const RoundedRectangleBorder(
+        borderRadius: BorderRadius.vertical(top: Radius.circular(16)),
+      ),
+      builder: (sheetContext) {
+        return Padding(
+          padding: EdgeInsets.only(
+            bottom: MediaQuery.of(sheetContext).viewInsets.bottom,
+          ),
+          child: StatefulBuilder(
+            builder: (context, setSheetState) {
+              final textTheme = Theme.of(context).textTheme;
+              return SafeArea(
+                child: Padding(
+                  padding: const EdgeInsets.fromLTRB(16, 12, 16, 16),
+                  child: Column(
+                    mainAxisSize: MainAxisSize.min,
+                    crossAxisAlignment: CrossAxisAlignment.stretch,
+                    children: [
+                      Text(
+                        'Vehicle & advance',
+                        style: textTheme.titleMedium
+                            ?.copyWith(fontWeight: FontWeight.w700),
+                      ),
+                      ListTile(
+                        contentPadding: EdgeInsets.zero,
+                        leading: const Icon(
+                          Icons.local_shipping,
+                          color: AppColors.primary,
+                        ),
+                        title: Text(entry.vehicle?.vehicleNumber ?? 'Select vehicle'),
+                        trailing: const Icon(Icons.chevron_right),
+                        onTap: () async {
+                          final vehicle = await _selectVehicle(sheetContext, entry);
+                          if (vehicle == null || !mounted) return;
+                          final drivers = this.context.read<DriverProvider>().drivers;
+                          final linked = resolveDriverForVehicle(vehicle, drivers);
+                          final usedDrivers = _allSelectedDriverIds(except: entry);
+                          setState(() {
+                            entry.vehicle = vehicle;
+                            if (linked != null && !usedDrivers.contains(linked.id)) {
+                              entry.driver = linked;
+                            }
+                          });
+                          _scheduleAutosave();
+                          setSheetState(() {});
+                        },
+                      ),
+                      ListTile(
+                        contentPadding: EdgeInsets.zero,
+                        leading: const Icon(Icons.person, color: AppColors.primary),
+                        title: Text(entry.driver?.name ?? 'Select driver'),
+                        subtitle: entry.driver == null
+                            ? null
+                            : Text(entry.driver!.mobile),
+                        trailing: const Icon(Icons.chevron_right),
+                        onTap: () async {
+                          final driver = await _selectDriver(sheetContext, entry);
+                          if (driver == null || !mounted) return;
+                          setState(() => entry.driver = driver);
+                          _scheduleAutosave();
+                          setSheetState(() {});
+                        },
+                      ),
+                      TextField(
+                        controller: entry.advanceController,
+                        keyboardType:
+                            const TextInputType.numberWithOptions(decimal: true),
+                        inputFormatters: [
+                          FilteringTextInputFormatter.allow(RegExp(r'[0-9.]')),
+                        ],
+                        decoration: const InputDecoration(
+                          labelText: 'Advance',
+                          prefixText: '₹ ',
+                          isDense: true,
+                        ),
+                        onChanged: (_) {
+                          setState(() {});
+                          _scheduleAutosave();
+                        },
+                      ),
+                      const SizedBox(height: 12),
+                      ElevatedButton(
+                        onPressed: () => Navigator.of(sheetContext).pop(),
+                        child: const Text('Done'),
                       ),
                     ],
                   ),
                 ),
-              ),
-            ),
-          );
-        }),
-        const SizedBox(height: 8.0),
-        SizedBox(
-          width: double.infinity,
-          child: OutlinedButton.icon(
-            onPressed: _addAssignment,
-            icon: const Icon(Icons.add),
-            label: const Text('Add Container / Vehicle / Driver'),
-            style: OutlinedButton.styleFrom(
-              foregroundColor: AppColors.primary,
-              side: const BorderSide(color: AppColors.primary, width: 1.5),
-              shape: RoundedRectangleBorder(
-                borderRadius: BorderRadius.circular(12.0),
-              ),
-            ),
+              );
+            },
           ),
+        );
+      },
+    );
+    if (mounted) setState(() {});
+  }
+
+  Widget _buildBottomBar(TextTheme textTheme) {
+    final busy = _isLoading || _isSavingDraft;
+    return SafeArea(
+      child: Container(
+        padding: const EdgeInsets.fromLTRB(16, 10, 16, 10),
+        decoration: const BoxDecoration(
+          color: AppColors.background,
+          border: Border(top: BorderSide(color: AppColors.dividerGrey)),
         ),
-      ],
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            if (_wizardStep == 1) ...[
+              Row(
+                children: [
+                  _buildBottomStat(Icons.alt_route, '$_totalRoutes', 'Routes'),
+                  _buildBottomStat(
+                    Icons.local_shipping,
+                    '$_totalVehicles',
+                    'Vehicles',
+                  ),
+                  const Spacer(),
+                  Column(
+                    crossAxisAlignment: CrossAxisAlignment.end,
+                    children: [
+                      const Text(
+                        'Total Advance',
+                        style: TextStyle(
+                          fontSize: 11,
+                          color: AppColors.textSecondary,
+                        ),
+                      ),
+                      Text(
+                        _formatInr(_totalAdvance),
+                        style: const TextStyle(
+                          fontWeight: FontWeight.w700,
+                          fontSize: 15,
+                        ),
+                      ),
+                    ],
+                  ),
+                ],
+              ),
+              const SizedBox(height: 8),
+            ],
+            SizedBox(
+              width: double.infinity,
+              height: 48,
+              child: ElevatedButton(
+                onPressed: busy
+                    ? null
+                    : () {
+                        if (_wizardStep == 0 &&
+                            _customerNameController.text.trim().isEmpty) {
+                          ScaffoldMessenger.of(context).showSnackBar(
+                            const SnackBar(
+                              content: Text('Please enter a customer'),
+                            ),
+                          );
+                          return;
+                        }
+                        setState(() => _wizardStep += 1);
+                      },
+                child: const Text('Next  →'),
+              ),
+            ),
+          ],
+        ),
+      ),
     );
   }
 
-  Widget _buildAssignmentHeader({
-    required int index,
-    required _AssignmentEntry entry,
-    required TextTheme textTheme,
-    required bool isExpanded,
-    required bool accordionMode,
-    required VoidCallback? onExpand,
-  }) {
-    final complete = _isAssignmentComplete(entry);
-
-    final title = Text(
-      'Entry ${index + 1}',
-      style: textTheme.titleSmall?.copyWith(
-        fontWeight: FontWeight.w600,
-        color: AppColors.primary,
-      ),
-    );
-
-    final removeButton = _assignments.length > 1
-        ? IconButton(
-            icon: const Icon(
-              Icons.remove_circle_outline,
-              color: AppColors.error,
-              size: 22.0,
-            ),
-            onPressed: () => _removeAssignment(index),
-            tooltip: 'Remove',
-          )
-        : null;
-
-    if (!accordionMode) {
-      return Row(
+  Widget _buildBottomStat(IconData icon, String value, String label) {
+    return Padding(
+      padding: const EdgeInsets.only(right: 14),
+      child: Column(
+        mainAxisSize: MainAxisSize.min,
+        crossAxisAlignment: CrossAxisAlignment.start,
         children: [
-          title,
-          const Spacer(),
-          if (removeButton != null) removeButton,
-        ],
-      );
-    }
-
-    return InkWell(
-      onTap: onExpand,
-      borderRadius: BorderRadius.circular(8.0),
-      child: Padding(
-        padding: const EdgeInsets.symmetric(vertical: 2.0),
-        child: Column(
-          crossAxisAlignment: CrossAxisAlignment.start,
-          children: [
-            Row(
-              crossAxisAlignment: CrossAxisAlignment.center,
-              children: [
-                Expanded(child: title),
-                Row(
-                  mainAxisSize: MainAxisSize.min,
-                  crossAxisAlignment: CrossAxisAlignment.center,
-                  children: [
-                    if (complete)
-                      const Padding(
-                        padding: EdgeInsets.only(right: 4.0),
-                        child: Icon(
-                          Icons.check_circle,
-                          color: AppColors.success,
-                          size: 20.0,
-                        ),
-                      ),
-                    AnimatedRotation(
-                      turns: isExpanded ? 0.5 : 0.0,
-                      duration: const Duration(milliseconds: 200),
-                      child: const Icon(
-                        Icons.expand_more,
-                        color: AppColors.textSecondary,
-                        size: 24.0,
-                      ),
-                    ),
-                    if (removeButton != null)
-                      IconButton(
-                        icon: const Icon(
-                          Icons.remove_circle_outline,
-                          color: AppColors.error,
-                          size: 22.0,
-                        ),
-                        onPressed: () => _removeAssignment(index),
-                        tooltip: 'Remove',
-                        padding: EdgeInsets.zero,
-                        constraints: const BoxConstraints(
-                          minWidth: 40.0,
-                          minHeight: 40.0,
-                        ),
-                        visualDensity: VisualDensity.compact,
-                      ),
-                  ],
-                ),
-              ],
-            ),
-            if (!isExpanded) ...[
-              const SizedBox(height: 4.0),
+          Row(
+            children: [
+              Icon(icon, size: 14, color: AppColors.primary),
+              const SizedBox(width: 4),
               Text(
-                _assignmentSummary(entry),
-                style: textTheme.bodySmall?.copyWith(
-                  color: AppColors.textSecondary,
+                value,
+                style: const TextStyle(
+                  fontWeight: FontWeight.w700,
+                  color: AppColors.textPrimary,
                 ),
-                maxLines: 2,
-                overflow: TextOverflow.ellipsis,
               ),
             ],
-          ],
-        ),
+          ),
+          Text(
+            label,
+            style: const TextStyle(fontSize: 10, color: AppColors.textSecondary),
+          ),
+        ],
       ),
-    );
-  }
-
-  Widget _buildAssignmentFields({
-    required _AssignmentEntry entry,
-    required TextTheme textTheme,
-    required int assignmentIndex,
-  }) {
-    return Column(
-      crossAxisAlignment: CrossAxisAlignment.start,
-      children: [
-        const SizedBox(height: 12.0),
-        _buildContainerNumberField(
-          entry,
-          textTheme,
-          focusNode: entry.containerFocusNode,
-        ),
-        const SizedBox(height: 12.0),
-        InkWell(
-          onTap: () async {
-            final v = await _selectVehicleForAssignment(
-              context,
-              assignmentIndex: assignmentIndex,
-            );
-            if (v == null || !mounted) return;
-            final drivers = context.read<DriverProvider>().drivers;
-            final linked = resolveDriverForVehicle(v, drivers);
-            setState(() {
-              entry.vehicle = v;
-              entry.driver = linked;
-            });
-            if (linked == null &&
-                v.driverId != null &&
-                v.driverId!.isNotEmpty) {
-              ScaffoldMessenger.of(context).showSnackBar(
-                const SnackBar(
-                  content: Text(
-                    'Assigned driver is inactive or unavailable. Please select a driver manually.',
-                  ),
-                ),
-              );
-            }
-          },
-          borderRadius: BorderRadius.circular(12.0),
-          child: Container(
-            padding: const EdgeInsets.all(12.0),
-            decoration: BoxDecoration(
-              color: AppColors.offWhite,
-              borderRadius: BorderRadius.circular(12.0),
-              border: Border.all(color: AppColors.dividerGrey),
-            ),
-            child: Row(
-              children: [
-                const Icon(Icons.inventory_2, color: AppColors.primary),
-                const SizedBox(width: 12.0),
-                Expanded(
-                  child: Text(
-                    entry.vehicle != null
-                        ? '${entry.vehicle!.vehicleNumber} (${entry.vehicle!.ownerType})'
-                        : 'Select vehicle',
-                    style: textTheme.bodyMedium?.copyWith(
-                      color: entry.vehicle != null
-                          ? AppColors.textPrimary
-                          : AppColors.textMuted,
-                    ),
-                  ),
-                ),
-                const Icon(Icons.search, color: AppColors.textSecondary, size: 20.0),
-              ],
-            ),
-          ),
-        ),
-        const SizedBox(height: 12.0),
-        InkWell(
-          onTap: () async {
-            final d = await _selectDriverForAssignment(
-              context,
-              assignmentIndex: assignmentIndex,
-            );
-            if (d != null) setState(() => entry.driver = d);
-          },
-          borderRadius: BorderRadius.circular(12.0),
-          child: Container(
-            padding: const EdgeInsets.all(12.0),
-            decoration: BoxDecoration(
-              color: AppColors.offWhite,
-              borderRadius: BorderRadius.circular(12.0),
-              border: Border.all(color: AppColors.dividerGrey),
-            ),
-            child: Row(
-              children: [
-                const Icon(Icons.person, color: AppColors.primary),
-                const SizedBox(width: 12.0),
-                Expanded(
-                  child: Text(
-                    entry.driver != null
-                        ? '${entry.driver!.name ?? 'Driver'} (${entry.driver!.mobile})'
-                        : 'Select driver',
-                    style: textTheme.bodyMedium?.copyWith(
-                      color: entry.driver != null
-                          ? AppColors.textPrimary
-                          : AppColors.textMuted,
-                    ),
-                  ),
-                ),
-                const Icon(Icons.search, color: AppColors.textSecondary, size: 20.0),
-              ],
-            ),
-          ),
-        ),
-      ],
-    );
-  }
-
-  Widget _buildContainerNumberField(
-    _AssignmentEntry entry,
-    TextTheme textTheme, {
-    FocusNode? focusNode,
-  }) {
-    final feedback = Validators.containerNumberLiveFeedback(
-      entry.containerController.text,
-    );
-    final guideColor = switch (feedback.status) {
-      ContainerNumberInputStatus.valid => AppColors.success,
-      ContainerNumberInputStatus.invalid => AppColors.error,
-      ContainerNumberInputStatus.typing => AppColors.info,
-      ContainerNumberInputStatus.empty => AppColors.textSecondary,
-    };
-    final suffixIcon = switch (feedback.status) {
-      ContainerNumberInputStatus.valid => const Icon(
-          Icons.check_circle,
-          color: AppColors.success,
-        ),
-      ContainerNumberInputStatus.invalid => const Icon(
-          Icons.error_outline,
-          color: AppColors.error,
-        ),
-      _ => null,
-    };
-
-    return Column(
-      crossAxisAlignment: CrossAxisAlignment.start,
-      children: [
-        TextFormField(
-          controller: entry.containerController,
-          focusNode: focusNode,
-          textInputAction: TextInputAction.next,
-          textCapitalization: TextCapitalization.characters,
-          autocorrect: false,
-          enableSuggestions: false,
-          inputFormatters: [
-            FilteringTextInputFormatter.allow(RegExp(r'[A-Za-z0-9]')),
-            LengthLimitingTextInputFormatter(11),
-          ],
-          onChanged: (_) => setState(() {}),
-          decoration: InputDecoration(
-            labelText: AppCopy.containerOptional,
-            hintText: 'ABCD1234567',
-            prefixIcon: const Icon(Icons.inventory_2_outlined),
-            suffixIcon: suffixIcon,
-            helperText: feedback.message,
-            helperStyle: textTheme.bodySmall?.copyWith(
-              color: guideColor,
-              height: 1.35,
-            ),
-            helperMaxLines: 2,
-          ),
-        ),
-      ],
     );
   }
 
@@ -1040,6 +2097,8 @@ class _CreateTripScreenState extends State<CreateTripScreen> {
                 .where((c) => c.name.toLowerCase().contains(q))
                 .take(8)
                 .toList();
+        final suggestionHeight =
+            (suggestions.length * 40.0).clamp(0, 120).toDouble();
 
         return Column(
           crossAxisAlignment: CrossAxisAlignment.stretch,
@@ -1051,30 +2110,34 @@ class _CreateTripScreenState extends State<CreateTripScreen> {
               textCapitalization: TextCapitalization.characters,
               onChanged: (_) => setState(() {}),
               onFieldSubmitted: (_) => _tripRefFocusNode.requestFocus(),
-              validator: (v) =>
-                  Validators.validateRequired(v?.trim(), 'Customer'),
+              validator: (v) => Validators.validateRequired(v?.trim(), 'Customer'),
               decoration: const InputDecoration(
                 labelText: 'Customer *',
                 hintText: 'Search or enter customer name',
-                prefixIcon: Icon(Icons.business_outlined),
+                isDense: true,
+                contentPadding: EdgeInsets.symmetric(horizontal: 12, vertical: 12),
+                prefixIcon: Icon(Icons.apartment_outlined),
+                suffixIcon: Icon(Icons.keyboard_arrow_down),
               ),
             ),
             if (_customerFocusNode.hasFocus && suggestions.isNotEmpty)
               Container(
-                margin: const EdgeInsets.only(top: 4.0),
-                constraints: const BoxConstraints(maxHeight: 160),
+                height: suggestionHeight,
+                margin: const EdgeInsets.only(top: 4),
                 decoration: BoxDecoration(
+                  color: AppColors.background,
                   border: Border.all(color: AppColors.dividerGrey),
-                  borderRadius: BorderRadius.circular(8.0),
+                  borderRadius: BorderRadius.circular(8),
                 ),
                 child: ListView.separated(
-                  shrinkWrap: true,
+                  padding: EdgeInsets.zero,
                   itemCount: suggestions.length,
                   separatorBuilder: (_, __) => const Divider(height: 1),
                   itemBuilder: (context, index) {
                     final customer = suggestions[index];
                     return ListTile(
                       dense: true,
+                      visualDensity: VisualDensity.compact,
                       title: Text(customer.name),
                       onTap: () {
                         _customerNameController.text = customer.name;
@@ -1088,6 +2151,12 @@ class _CreateTripScreenState extends State<CreateTripScreen> {
             Align(
               alignment: Alignment.centerLeft,
               child: TextButton(
+                style: TextButton.styleFrom(
+                  visualDensity: VisualDensity.compact,
+                  padding: EdgeInsets.zero,
+                  minimumSize: const Size(0, 32),
+                  tapTargetSize: MaterialTapTargetSize.shrinkWrap,
+                ),
                 onPressed: _showAddCustomerDialog,
                 child: const Text('+ Add Customer'),
               ),
@@ -1106,78 +2175,47 @@ class _CreateTripScreenState extends State<CreateTripScreen> {
       textCapitalization: TextCapitalization.characters,
       decoration: const InputDecoration(
         labelText: AppCopy.tripRefOptional,
-        hintText: 'Enter trip reference',
+        hintText: 'e.g. 12',
+        isDense: true,
+        contentPadding: EdgeInsets.symmetric(horizontal: 12, vertical: 12),
+        prefixIcon: Icon(Icons.tag_outlined),
       ),
-      maxLines: 2,
     );
+  }
+}
+
+
+class _DashedBorderPainter extends CustomPainter {
+  const _DashedBorderPainter({required this.color});
+
+  final Color color;
+
+  @override
+  void paint(Canvas canvas, Size size) {
+    final paint = Paint()
+      ..color = color
+      ..style = PaintingStyle.stroke
+      ..strokeWidth = 1.2;
+    final rrect = RRect.fromRectAndRadius(
+      Rect.fromLTWH(1, 1, size.width - 2, size.height - 2),
+      const Radius.circular(12),
+    );
+    final path = Path()..addRRect(rrect);
+    const dash = 5.0;
+    const gap = 3.5;
+    for (final metric in path.computeMetrics()) {
+      var distance = 0.0;
+      while (distance < metric.length) {
+        final end = (distance + dash).clamp(0.0, metric.length);
+        canvas.drawPath(metric.extractPath(distance, end), paint);
+        distance += dash + gap;
+      }
+    }
   }
 
-  Widget _buildSaveDraftButton(TextTheme textTheme) {
-    return SizedBox(
-      height: 52.0,
-      child: OutlinedButton(
-        onPressed: (_isLoading || _isSavingDraft) ? null : _handleSaveDraft,
-        style: OutlinedButton.styleFrom(
-          foregroundColor: AppColors.primary,
-          side: const BorderSide(color: AppColors.primary, width: 1.5),
-          shape: RoundedRectangleBorder(
-            borderRadius: BorderRadius.circular(12.0),
-          ),
-        ),
-        child: _isSavingDraft
-            ? const SizedBox(
-                height: 20.0,
-                width: 20.0,
-                child: CircularProgressIndicator(strokeWidth: 2.0),
-              )
-            : Text(
-                AppCopy.saveDraft,
-                style: textTheme.labelLarge?.copyWith(
-                  fontWeight: FontWeight.w600,
-                ),
-              ),
-      ),
-    );
-  }
-
-  Widget _buildCreateTripButton(TextTheme textTheme) {
-    return SizedBox(
-      height: 52.0,
-      child: ElevatedButton(
-        onPressed: _canCreateTrip ? _handleCreateTrip : null,
-        style: ElevatedButton.styleFrom(
-          backgroundColor: AppColors.primary,
-          foregroundColor: AppColors.background,
-          disabledBackgroundColor: AppColors.primary.withOpacity(0.5),
-          disabledForegroundColor: AppColors.background.withOpacity(0.7),
-          elevation: 0,
-          shape: RoundedRectangleBorder(
-            borderRadius: BorderRadius.circular(12.0),
-          ),
-        ),
-        child: _isLoading
-            ? const SizedBox(
-                height: 20.0,
-                width: 20.0,
-                child: CircularProgressIndicator(
-                  strokeWidth: 2.0,
-                  valueColor: AlwaysStoppedAnimation<Color>(
-                    AppColors.background,
-                  ),
-                ),
-              )
-            : Text(
-                AppCopy.newTrip,
-                style: textTheme.labelLarge?.copyWith(
-                  color: _canCreateTrip
-                      ? AppColors.background
-                      : AppColors.background.withOpacity(0.7),
-                  fontWeight: FontWeight.w600,
-                ),
-              ),
-      ),
-    );
-  }
+  @override
+  bool shouldRepaint(covariant _DashedBorderPainter oldDelegate) =>
+      oldDelegate.color != color;
 }
 
 class _AddCustomerDialog extends StatefulWidget {
@@ -1323,7 +2361,8 @@ class _DriverPickerDialogState extends State<_DriverPickerDialog> {
                             final driver = filtered[index];
                             return ListTile(
                               leading: CircleAvatar(
-                                backgroundColor: AppColors.primary.withOpacity(0.1),
+                                backgroundColor:
+                                    AppColors.primary.withValues(alpha: 0.1),
                                 child: Text(
                                   (driver.name?.isNotEmpty ?? false)
                                       ? driver.name![0].toUpperCase()
@@ -1465,7 +2504,7 @@ class _VehiclePickerDialogState extends State<_VehiclePickerDialog> {
                             ];
                             return ListTile(
                               leading: const Icon(
-                                Icons.inventory_2,
+                                Icons.local_shipping,
                                 color: AppColors.primary,
                               ),
                               title: Text(

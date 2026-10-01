@@ -3,9 +3,11 @@ import 'package:flutter/foundation.dart';
 import '../core/config/api_config.dart';
 import '../core/utils/json_parser.dart';
 import '../data/models/vehicle_model.dart';
+import '../data/models/rc_verification.dart';
 import '../data/models/trip_model.dart';
 import '../data/models/fleet_import_result.dart';
 import '../data/models/vehicle_verification_result.dart';
+import '../data/models/driver_already_assigned_exception.dart';
 import 'api_service.dart';
 
 class VehicleService {
@@ -13,10 +15,28 @@ class VehicleService {
 
   Never _throwApiFailure(dynamic data, {required String fallback}) {
     if (data is Map) {
+      final assigned = DriverAlreadyAssignedException.tryParse(
+        DioException(
+          requestOptions: RequestOptions(path: ApiConfig.vehicles),
+          response: Response(
+            requestOptions: RequestOptions(path: ApiConfig.vehicles),
+            statusCode: 409,
+            data: data,
+          ),
+          type: DioExceptionType.badResponse,
+        ),
+      );
+      if (assigned != null) throw assigned;
       final message = data['message']?.toString();
       throw Exception(message ?? fallback);
     }
     throw Exception(fallback);
+  }
+
+  Never _rethrowVehicleError(Object e) {
+    final assigned = DriverAlreadyAssignedException.tryParse(e);
+    if (assigned != null) throw assigned;
+    throw e;
   }
 
   Future<List<VehicleModel>> getVehicles({
@@ -100,35 +120,52 @@ class VehicleService {
     }
   }
 
-  Future<VehicleModel?> createVehicle(Map<String, dynamic> vehicleData) async {
+  Future<VehicleCreateResult?> createVehicle(Map<String, dynamic> vehicleData) async {
     try {
       if (kDebugMode) {
         print('VehicleService: Creating vehicle');
       }
-      
+
       final response = await _api.post(
         ApiConfig.vehicles,
         data: vehicleData,
       );
 
-      if (response.data['success'] == true) {
-        final data = response.data['data'];
-        if (data != null && data['vehicle'] != null) {
-          return VehicleModel.fromJson(data['vehicle']);
-        }
-        // Fallback
-        if (data != null) {
-          return VehicleModel.fromJson(data);
-        }
-      }
+      final created = _parseCreateResult(response.data);
+      if (created != null) return created;
       _throwApiFailure(response.data, fallback: 'Failed to create vehicle');
     } catch (e, stackTrace) {
       if (kDebugMode) {
         print('VehicleService: Error creating vehicle: $e');
         print('Stack: $stackTrace');
       }
-      rethrow;
+      _rethrowVehicleError(e);
     }
+  }
+
+  /// A 201 is a successful create even when [RcVerification.status] is not verified.
+  VehicleCreateResult? _parseCreateResult(dynamic body) {
+    if (body is! Map || body['success'] != true) return null;
+    final data = body['data'];
+    if (data is! Map) return null;
+
+    Map<String, dynamic>? vehicleJson;
+    if (data['vehicle'] is Map) {
+      vehicleJson = Map<String, dynamic>.from(data['vehicle'] as Map);
+    } else {
+      vehicleJson = Map<String, dynamic>.from(data);
+    }
+
+    final vehicle = VehicleModel.fromJson(vehicleJson);
+    RcVerification? verification;
+    if (data['verification'] is Map) {
+      verification = RcVerification.fromJson(
+        Map<String, dynamic>.from(data['verification'] as Map),
+      );
+    } else {
+      verification = vehicle.rcVerification;
+    }
+    return VehicleCreateResult(vehicle: vehicle, verification: verification);
   }
 
   /// Verifies a vehicle registration number via SurePass RC (`POST /vehicles/verify`).
@@ -198,7 +235,7 @@ class VehicleService {
         print('VehicleService: Error updating vehicle: $e');
         print('Stack: $stackTrace');
       }
-      rethrow;
+      _rethrowVehicleError(e);
     }
   }
 

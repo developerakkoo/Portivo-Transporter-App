@@ -169,6 +169,20 @@ class VehicleBookingService {
     }
   }
 
+  /// Buyer formally submits a DRAFT/NEGOTIATING booking to the seller (→ REQUESTED).
+  Future<void> submitBooking(String bookingId) async {
+    try {
+      final response = await _api.put(ApiConfig.vehicleBookingSubmit(bookingId));
+      final body = response.data;
+      if (body is! Map || body['success'] != true) {
+        throw Exception(body is Map ? body['message']?.toString() ?? 'Failed' : 'Failed');
+      }
+    } on DioException catch (e) {
+      if (kDebugMode) print('VehicleBookingService.submitBooking: $e');
+      throw Exception(_messageFromDio(e));
+    }
+  }
+
   Future<void> rejectBooking(String bookingId, {String? reason}) async {
     try {
       final response = await _api.put(

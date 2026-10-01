@@ -4,6 +4,7 @@ import '../core/constants/app_constants.dart';
 import '../core/theme/app_colors.dart';
 import '../core/utils/helpers.dart';
 import '../core/utils/trip_operational_locations.dart';
+import '../core/utils/vehicle_overflow.dart';
 import '../data/models/trip_model.dart';
 
 /// Accordion trip card: summary in header; locations, date, and optional actions when expanded.
@@ -101,6 +102,13 @@ class TripExpansionCard extends StatelessWidget {
     );
   }
 
+  VehicleOverflow get _vehicleOverflow {
+    return vehicleOverflowFromPlates([
+      trip.vehicleNumber,
+      ...?trip.assignments?.map((a) => a.vehicleNumber),
+    ]);
+  }
+
   Widget _buildHeader(String titleText, String? subtitleText) {
     return Column(
       mainAxisSize: MainAxisSize.min,
@@ -134,6 +142,22 @@ class TripExpansionCard extends StatelessWidget {
                         style: textTheme.bodySmall?.copyWith(
                           color: AppColors.textSecondary,
                           fontSize: 11.0,
+                        ),
+                        maxLines: 1,
+                        overflow: TextOverflow.ellipsis,
+                      ),
+                    ),
+                  if (_vehicleOverflow.primary != null)
+                    Padding(
+                      padding: const EdgeInsets.only(top: 4.0),
+                      child: Text(
+                        _vehicleOverflow.extraCount > 0
+                            ? '${_vehicleOverflow.primary}  ${_vehicleOverflow.extraLabel}'
+                            : _vehicleOverflow.primary!,
+                        style: textTheme.bodySmall?.copyWith(
+                          color: AppColors.textPrimary,
+                          fontWeight: FontWeight.w600,
+                          fontSize: 12.0,
                         ),
                         maxLines: 1,
                         overflow: TextOverflow.ellipsis,
@@ -299,6 +323,12 @@ class TripExpansionCard extends StatelessWidget {
             child: card,
           ),
         ),
+        const SizedBox(height: 10.0),
+      ],
+
+      if (trip.status == AppConstants.tripStatusCompleted ||
+          trip.status == AppConstants.tripStatusPodPending) ...[
+        ..._buildCompletedPodRows(),
         const SizedBox(height: 10.0),
       ],
 
@@ -536,6 +566,84 @@ class TripExpansionCard extends StatelessWidget {
               fontWeight: FontWeight.w600,
               fontSize: 10.0,
             ),
+          ),
+        ],
+      ),
+    );
+  }
+
+  List<Widget> _buildCompletedPodRows() {
+    final assignments = trip.assignments ?? const <TripAssignment>[];
+    final rows = <Widget>[];
+    if (assignments.isEmpty) {
+      final received = trip.pod?.uploadedAt != null;
+      rows.add(_podVehicleRow(
+        vehicleNumber: trip.vehicleNumber ?? 'Vehicle',
+        driverName: trip.driverName,
+        driverMobile: trip.driverMobile,
+        received: received,
+      ));
+      return rows;
+    }
+    final visible = assignments.take(5).toList();
+    for (final a in visible) {
+      rows.add(_podVehicleRow(
+        vehicleNumber: a.vehicleNumber ?? trip.vehicleNumber ?? 'Vehicle',
+        driverName: a.driverName ?? trip.driverName,
+        driverMobile: a.driverMobile ?? trip.driverMobile,
+        received: trip.pod?.uploadedAt != null,
+      ));
+    }
+    if (assignments.length > 5) {
+      rows.add(Padding(
+        padding: const EdgeInsets.only(bottom: 6),
+        child: Text(
+          extraVehiclesLabel(assignments.length - 5),
+          style: textTheme.bodySmall?.copyWith(color: AppColors.textMuted),
+        ),
+      ));
+    }
+    return rows;
+  }
+
+  Widget _podVehicleRow({
+    required String vehicleNumber,
+    String? driverName,
+    String? driverMobile,
+    required bool received,
+  }) {
+    return Padding(
+      padding: const EdgeInsets.only(bottom: 8),
+      child: Row(
+        children: [
+          Expanded(
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Text(
+                  vehicleNumber,
+                  style: textTheme.bodyMedium?.copyWith(fontWeight: FontWeight.w600),
+                ),
+                Text(
+                  [
+                    if (driverName != null && driverName.isNotEmpty) driverName,
+                    if (driverMobile != null && driverMobile.isNotEmpty) driverMobile,
+                  ].join(' · '),
+                  style: textTheme.bodySmall?.copyWith(color: AppColors.textSecondary),
+                ),
+              ],
+            ),
+          ),
+          Text(
+            received ? 'POD Received' : 'POD Pending',
+            style: textTheme.labelSmall?.copyWith(
+              color: received ? AppColors.success : AppColors.warning,
+              fontWeight: FontWeight.w600,
+            ),
+          ),
+          TextButton(
+            onPressed: onOpenDetail,
+            child: const Text('View POD'),
           ),
         ],
       ),

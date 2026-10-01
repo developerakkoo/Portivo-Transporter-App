@@ -22,9 +22,14 @@ class NotificationProvider with ChangeNotifier {
     _socketService.addTripCreatedListener(_onTripCreated);
     _socketService.addMarketplaceChatListener(_onMarketplaceSocket);
     _socketService.addVehicleTypeRequestListener(_onVehicleTypeRequestUpdated);
+    _socketService.addNotificationListener(_onNotificationPing);
   }
 
   void _onTripCreated(Map<String, dynamic> _) {
+    loadNotifications(refresh: true);
+  }
+
+  void _onNotificationPing(Map<String, dynamic> _) {
     loadNotifications(refresh: true);
   }
 
@@ -117,6 +122,7 @@ class NotificationProvider with ChangeNotifier {
   void dispose() {
     _socketService.removeTripCreatedListener(_onTripCreated);
     _socketService.removeMarketplaceChatListener(_onMarketplaceSocket);
+    _socketService.removeNotificationListener(_onNotificationPing);
     super.dispose();
   }
 }

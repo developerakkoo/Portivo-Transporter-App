@@ -1,3 +1,5 @@
+import 'razorpay_payment_link_model.dart';
+
 /// Server: [CLOSED_WITH_POD, CLOSED_WITHOUT_POD] — trip finished for marketplace badge.
 const Set<String> kMarketplaceClosedTripStatuses = {
   'CLOSED_WITH_POD',
@@ -114,7 +116,10 @@ class MarketplaceMessage {
       return 'Attachment';
     }
     final c = m.content.trim();
-    return c.isEmpty ? 'No messages yet' : c;
+    if (c.isEmpty) return 'No messages yet';
+    final extra = ExtraChargePaymentRequest.inboxPreview(c);
+    if (extra != c) return extra;
+    return c;
   }
 
   Map<String, dynamic> toJson() => {

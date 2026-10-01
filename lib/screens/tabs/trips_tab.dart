@@ -4,12 +4,14 @@ import '../../core/constants/app_copy.dart';
 import '../../core/theme/app_colors.dart';
 import '../../core/constants/app_constants.dart';
 import '../../data/models/trip_model.dart';
+import '../../data/models/trip_group.dart';
 import '../../core/utils/user_feedback.dart';
 import '../../providers/trip_provider.dart';
 import '../../providers/pinned_trips_provider.dart';
 import '../../providers/navigation_state_provider.dart';
 import '../../widgets/open_app_drawer_button.dart';
 import '../../widgets/trip_expansion_card.dart';
+import '../../widgets/trip_group_card.dart';
 import '../../providers/auth_provider.dart';
 import '../../services/socket_service.dart';
 import '../../core/utils/create_trip_navigation.dart';
@@ -133,7 +135,12 @@ class _TripsTabState extends State<TripsTab>
     return trips.where((trip) {
       final containerId = (trip.containerNumber ?? '').toLowerCase();
       final reference = (trip.reference ?? '').toLowerCase();
-      return containerId.contains(searchQuery) || reference.contains(searchQuery);
+      final customer = (trip.customerName ?? '').toLowerCase();
+      final tripId = trip.tripId.toLowerCase();
+      return containerId.contains(searchQuery) ||
+          reference.contains(searchQuery) ||
+          customer.contains(searchQuery) ||
+          tripId.contains(searchQuery);
     }).toList();
   }
 
@@ -152,6 +159,14 @@ class _TripsTabState extends State<TripsTab>
     await tripProvider.bootstrapTripsIfNeeded();
     if (!mounted) return;
     await pinnedProvider.reconcileWithTripProvider(tripProvider);
+  }
+
+  Future<void> _onPullRefreshMarketplace() async {
+    final tripProvider = Provider.of<TripProvider>(context, listen: false);
+    await Future.wait([
+      tripProvider.loadAvailableTrips(refresh: true),
+      tripProvider.loadMarketplaceAwardedTrips(),
+    ]);
   }
 
   @override
@@ -315,11 +330,11 @@ class _TripsTabState extends State<TripsTab>
                   return TabBarView(
                     controller: _tabController,
                     children: [
-                      _buildTripsList(AppConstants.tripStatusActive, textTheme, highlightTripId: navState.pendingHighlightTripId),
-                      _buildTripsList(AppConstants.tripStatusPodPending, textTheme, highlightTripId: navState.pendingHighlightTripId),
+                      _buildActiveGroupsList(textTheme),
+                      _buildGroupedTripsList(tripProvider.podPendingTrips, textTheme),
                       _buildTripsList(AppConstants.tripStatusCompleted, textTheme, highlightTripId: navState.pendingHighlightTripId),
                       _buildTripsList(AppConstants.tripStatusCancelled, textTheme, highlightTripId: navState.pendingHighlightTripId),
-                      _buildTripsList(AppConstants.tripTabMarketplace, textTheme, highlightTripId: navState.pendingHighlightTripId),
+                      _buildMarketplaceTab(textTheme, highlightTripId: navState.pendingHighlightTripId),
                     ],
                   );
                 },
@@ -329,6 +344,260 @@ class _TripsTabState extends State<TripsTab>
         ),
       );
         },
+      ),
+    );
+  }
+
+  List<TripGroup> _getFilteredGroups(List<TripGroup> groups) {
+    final searchQuery = _searchController.text.toLowerCase();
+    if (searchQuery.isEmpty) return groups;
+    return groups.where((group) {
+      final customer = (group.customerName ?? '').toLowerCase();
+      final ref = (group.reference ?? '').toLowerCase();
+      if (customer.contains(searchQuery) || ref.contains(searchQuery)) {
+        return true;
+      }
+      return group.trips.any((t) {
+        final container = (t.containerNumber ?? '').toLowerCase();
+        final tripRef = (t.reference ?? '').toLowerCase();
+        return container.contains(searchQuery) || tripRef.contains(searchQuery);
+      });
+    }).toList();
+  }
+
+  /// Active sub-tab: one card per trip group (multi-route/multi-vehicle trip).
+  Widget _buildActiveGroupsList(TextTheme textTheme) {
+    return Consumer<TripProvider>(
+      builder: (context, tripProvider, child) {
+        final groups = _getFilteredGroups(tripProvider.activeTripGroups);
+
+        if (groups.isEmpty) {
+          return RefreshIndicator(
+            onRefresh: _onPullRefreshTrips,
+            child: CustomScrollView(
+              physics: const AlwaysScrollableScrollPhysics(),
+              slivers: [
+                SliverFillRemaining(
+                  hasScrollBody: false,
+                  child: Column(
+                    mainAxisAlignment: MainAxisAlignment.center,
+                    children: [
+                      Icon(
+                        Icons.inventory_2_outlined,
+                        size: 64.0,
+                        color: AppColors.textMuted,
+                      ),
+                      const SizedBox(height: 24.0),
+                      Text(
+                        'No trips found',
+                        style: textTheme.bodyMedium?.copyWith(
+                          color: AppColors.textSecondary,
+                        ),
+                        textAlign: TextAlign.center,
+                      ),
+                    ],
+                  ),
+                ),
+              ],
+            ),
+          );
+        }
+
+        return RefreshIndicator(
+          onRefresh: _onPullRefreshTrips,
+          child: ListView.builder(
+            physics: const AlwaysScrollableScrollPhysics(),
+            padding: const EdgeInsets.symmetric(horizontal: 24.0),
+            itemCount: groups.length,
+            itemBuilder: (context, index) {
+              final group = groups[index];
+              return TripGroupCard(
+                group: group,
+                textTheme: textTheme,
+                onViewTrip: () {
+                  Navigator.of(context).pushNamed(
+                    '/trip-group-detail',
+                    arguments: group.groupId,
+                  );
+                },
+              );
+            },
+          ),
+        );
+      },
+    );
+  }
+
+  List<TripGroup> _groupTrips(List<TripModel> trips) {
+    final order = <String>[];
+    final byGroup = <String, List<TripModel>>{};
+    for (final trip in trips) {
+      final key = (trip.tripGroupId != null && trip.tripGroupId!.isNotEmpty)
+          ? trip.tripGroupId!
+          : trip.id;
+      byGroup.putIfAbsent(key, () {
+        order.add(key);
+        return <TripModel>[];
+      }).add(trip);
+    }
+    return [for (final key in order) TripGroup.fromTrips(key, byGroup[key]!)];
+  }
+
+  /// Same summary card as Active, for a status list such as Awaiting POD.
+  Widget _buildGroupedTripsList(List<TripModel> trips, TextTheme textTheme) {
+    final groups = _getFilteredGroups(_groupTrips(trips));
+    if (groups.isEmpty) {
+      return RefreshIndicator(
+        onRefresh: _onPullRefreshTrips,
+        child: CustomScrollView(
+          physics: const AlwaysScrollableScrollPhysics(),
+          slivers: [
+            SliverFillRemaining(
+              hasScrollBody: false,
+              child: Column(
+                mainAxisAlignment: MainAxisAlignment.center,
+                children: [
+                  Icon(
+                    Icons.inventory_2_outlined,
+                    size: 64.0,
+                    color: AppColors.textMuted,
+                  ),
+                  const SizedBox(height: 24.0),
+                  Text(
+                    'No trips found',
+                    style: textTheme.bodyMedium?.copyWith(
+                      color: AppColors.textSecondary,
+                    ),
+                    textAlign: TextAlign.center,
+                  ),
+                ],
+              ),
+            ),
+          ],
+        ),
+      );
+    }
+
+    return RefreshIndicator(
+      onRefresh: _onPullRefreshTrips,
+      child: ListView.builder(
+        physics: const AlwaysScrollableScrollPhysics(),
+        padding: const EdgeInsets.symmetric(horizontal: 24.0),
+        itemCount: groups.length,
+        itemBuilder: (context, index) {
+          final group = groups[index];
+          return TripGroupCard(
+            group: group,
+            textTheme: textTheme,
+            onViewTrip: () {
+              Navigator.of(context).pushNamed(
+                '/trip-group-detail',
+                arguments: group.groupId,
+              );
+            },
+          );
+        },
+      ),
+    );
+  }
+
+  /// Marketplace tab: awarded inquiry/booking trips ready to start (Start Trip)
+  /// followed by open customer offers (Accept/Reject).
+  Widget _buildMarketplaceTab(TextTheme textTheme, {String? highlightTripId}) {
+    return Consumer<TripProvider>(
+      builder: (context, tripProvider, child) {
+        final awarded = _getFilteredTrips(tripProvider.marketplaceAwardedTrips);
+        final offers = _getFilteredTrips(tripProvider.availableTrips);
+
+        if (awarded.isEmpty && offers.isEmpty) {
+          return RefreshIndicator(
+            onRefresh: _onPullRefreshMarketplace,
+            child: CustomScrollView(
+              physics: const AlwaysScrollableScrollPhysics(),
+              slivers: [
+                SliverFillRemaining(
+                  hasScrollBody: false,
+                  child: Column(
+                    mainAxisAlignment: MainAxisAlignment.center,
+                    children: [
+                      Icon(
+                        Icons.inventory_2_outlined,
+                        size: 64.0,
+                        color: AppColors.textMuted,
+                      ),
+                      const SizedBox(height: 24.0),
+                      Text(
+                        'No marketplace trips for now',
+                        style: textTheme.bodyMedium?.copyWith(
+                          color: AppColors.textSecondary,
+                        ),
+                        textAlign: TextAlign.center,
+                      ),
+                      const SizedBox(height: 8.0),
+                      Padding(
+                        padding: const EdgeInsets.symmetric(horizontal: 32.0),
+                        child: Text(
+                          'Awarded inquiries ready to start and open customer offers appear here.',
+                          style: textTheme.bodySmall?.copyWith(
+                            color: AppColors.textMuted,
+                          ),
+                          textAlign: TextAlign.center,
+                        ),
+                      ),
+                    ],
+                  ),
+                ),
+              ],
+            ),
+          );
+        }
+
+        return RefreshIndicator(
+          onRefresh: _onPullRefreshMarketplace,
+          child: ListView(
+            physics: const AlwaysScrollableScrollPhysics(),
+            padding: const EdgeInsets.symmetric(horizontal: 24.0),
+            children: [
+              if (awarded.isNotEmpty) ...[
+                _marketplaceSectionHeader('Ready to Start', textTheme),
+                ...awarded.asMap().entries.map(
+                      (e) => _buildTripCard(
+                        e.value,
+                        textTheme,
+                        e.key,
+                        showAcceptButton: false,
+                        highlightTripId: highlightTripId,
+                      ),
+                    ),
+              ],
+              if (offers.isNotEmpty) ...[
+                _marketplaceSectionHeader('Customer Offers', textTheme),
+                ...offers.asMap().entries.map(
+                      (e) => _buildTripCard(
+                        e.value,
+                        textTheme,
+                        e.key,
+                        showAcceptButton: true,
+                        highlightTripId: highlightTripId,
+                      ),
+                    ),
+              ],
+            ],
+          ),
+        );
+      },
+    );
+  }
+
+  Widget _marketplaceSectionHeader(String title, TextTheme textTheme) {
+    return Padding(
+      padding: const EdgeInsets.only(top: 16.0, bottom: 8.0),
+      child: Text(
+        title,
+        style: textTheme.titleSmall?.copyWith(
+          fontWeight: FontWeight.w700,
+          color: AppColors.textPrimary,
+        ),
       ),
     );
   }

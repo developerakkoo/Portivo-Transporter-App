@@ -9,6 +9,9 @@ class DriverModel {
   final String? riskLevel;
   final String? language;
   final double walletBalance;
+  final String? alternateMobile;
+  final String? licenseNumber;
+  final DateTime? licenseValidTill;
   final DateTime createdAt;
   final DateTime updatedAt;
 
@@ -21,6 +24,9 @@ class DriverModel {
     this.riskLevel,
     this.language,
     required this.walletBalance,
+    this.alternateMobile,
+    this.licenseNumber,
+    this.licenseValidTill,
     required this.createdAt,
     required this.updatedAt,
   });
@@ -35,6 +41,9 @@ class DriverModel {
       riskLevel: json['riskLevel']?.toString(),
       language: json['language']?.toString(),
       walletBalance: JsonParser.extractDouble(json['walletBalance'], 0.0),
+      alternateMobile: _optionalString(json['alternateMobile']),
+      licenseNumber: _optionalString(json['licenseNumber']),
+      licenseValidTill: JsonParser.extractDateTime(json['licenseValidTill']),
       createdAt: JsonParser.extractDateTime(json['createdAt']) ?? DateTime.now(),
       updatedAt: JsonParser.extractDateTime(json['updatedAt']) ?? DateTime.now(),
     );
@@ -45,5 +54,11 @@ class DriverModel {
       'name': name,
       'language': language,
     };
+  }
+
+  static String? _optionalString(dynamic value) {
+    if (value == null) return null;
+    final text = value.toString().trim();
+    return text.isEmpty ? null : text;
   }
 }

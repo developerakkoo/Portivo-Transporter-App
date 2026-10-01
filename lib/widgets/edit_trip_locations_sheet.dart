@@ -55,6 +55,7 @@ class _EditTripLocationsSheetState extends State<EditTripLocationsSheet> {
           isPickup: point == OperationalPoint.a,
           appBarTitle: TripOperationalLocations.pickerTitle(_draft.tripType, point),
           initialQuery: current?.address,
+          showMap: false,
         ),
       ),
     );
